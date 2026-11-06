@@ -218,25 +218,61 @@ function wireYear(main) {
 
 /* ---- Address suggestions while typing ---- */
 (() => {
-  const list = document.createElement('datalist');
-  list.id = 'addr-list';
-  document.body.appendChild(list);
-  let timer, seq = 0;
+  const style = document.createElement('style');
+  style.textContent = '#addr-menu{position:fixed;z-index:9999;background:var(--surface);border:1px solid var(--line);border-radius:8px;box-shadow:0 12px 32px rgba(0,0,0,.3);max-height:260px;overflow:auto;padding:4px}#addr-menu[hidden]{display:none}#addr-menu button{display:block;width:100%;text-align:left;background:none;border:0;color:var(--ink);font:inherit;font-size:15px;padding:10px 12px;border-radius:6px;cursor:pointer}#addr-menu button:hover,#addr-menu button[aria-selected=true]{background:var(--accent-soft);color:var(--accent)}';
+  style.textContent += '.brand{display:inline-flex;align-items:center;gap:10px;text-decoration:none;color:var(--ink)}.brand:hover{color:var(--ink)}.mark{display:grid;place-items:center;width:38px;height:38px;flex:none;border-radius:8px;background:var(--ink);color:var(--bg);font:600 12px/1 var(--font-mono);letter-spacing:.04em}.brand-name{font:700 17px/1.1 var(--font-display)}';
+  document.head.appendChild(style);
+  const menu = document.createElement('div');
+  menu.id = 'addr-menu';
+  menu.setAttribute('role', 'listbox');
+  menu.hidden = true;
+  let target = null, items = [], active = -1, timer, seq = 0, picking = false;
+  const hide = () => { menu.hidden = true; items = []; active = -1; };
+  const mark = () => $$('button', menu).forEach((b, i) => b.setAttribute('aria-selected', i === active ? 'true' : 'false'));
+  const show = list => {
+    items = list; active = -1;
+    if (!list.length || !target) { hide(); return; }
+    (target.closest('dialog') || document.body).appendChild(menu);
+    menu.innerHTML = list.map((v, i) => `<button type="button" role="option" data-i="${i}">${esc(v)}</button>`).join('');
+    const r = target.getBoundingClientRect();
+    menu.style.left = r.left + 'px'; menu.style.top = (r.bottom + 4) + 'px'; menu.style.width = r.width + 'px';
+    menu.hidden = false;
+  };
+  const pick = i => {
+    if (!target || !items[i]) return;
+    const t = target;
+    picking = true;
+    t.value = items[i];
+    hide();
+    t.dispatchEvent(new Event('input', { bubbles: true }));
+    t.dispatchEvent(new Event('change', { bubbles: true }));
+    picking = false;
+  };
+  menu.addEventListener('mousedown', e => { e.preventDefault(); const b = e.target.closest('button'); if (b) pick(Number(b.dataset.i)); });
   document.addEventListener('input', e => {
     const t = e.target;
-    if (!t.matches || !t.matches('[data-addr]')) return;
+    if (picking || !t.matches || !t.matches('[data-addr]')) return;
+    target = t;
     clearTimeout(timer);
     const q = t.value.trim();
-    if (q.length < 4) { list.innerHTML = ''; return; }
+    if (q.length < 4) { hide(); return; }
     const mine = ++seq;
     timer = setTimeout(async () => {
       try {
         const res = await api('/address?q=' + encodeURIComponent(q));
-        if (mine !== seq) return;
-        list.innerHTML = res.map(v => `<option value="${esc(v)}"></option>`).join('');
+        if (mine === seq && document.activeElement === t) show(res);
       } catch (err) { /* suggestions are optional */ }
-    }, 300);
+    }, 250);
   });
+  document.addEventListener('keydown', e => {
+    if (menu.hidden || !e.target.matches || !e.target.matches('[data-addr]')) return;
+    if (e.key === 'ArrowDown') { e.preventDefault(); active = (active + 1) % items.length; mark(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); active = (active - 1 + items.length) % items.length; mark(); }
+    else if (e.key === 'Enter' && active >= 0) { e.preventDefault(); pick(active); }
+    else if (e.key === 'Escape') { e.preventDefault(); hide(); }
+  });
+  document.addEventListener('focusout', e => { if (e.target.matches && e.target.matches('[data-addr]')) { seq++; hide(); } });
+  window.addEventListener('resize', hide);
 })();
 
 /* =====================================================================
@@ -505,7 +541,7 @@ VIEWS.settings = async main => {
       </div></section>
       <section class="panel"><h2>Business</h2><div class="body" style="display:grid;gap:14px">
         <div class="grid2">${f('business_name', 'Business name')}${f('business_tagline', 'Tagline')}</div>
-        <div class="grid2">${f('business_address', 'Business address (on invoices)', 'data-addr list=\"addr-list\" autocomplete=\"off\"')}${f('home_address', 'Starting address for mileage trips', 'data-addr list=\"addr-list\" autocomplete=\"off\"')}</div>
+        <div class="grid2">${f('business_address', 'Business address (on invoices)', 'data-addr autocomplete=\"off\"')}${f('home_address', 'Starting address for mileage trips', 'data-addr autocomplete=\"off\"')}</div>
       </div></section>
       <section class="panel"><h2>Invoices</h2><div class="body" style="display:grid;gap:14px">
         <div class="grid3">${f('invoice_terms_days', 'Days until due', 'min="0"', 'number')}${f('sales_tax_rate', 'Sales tax rate %', 'min="0" step="0.01"', 'number')}${f('timezone', 'Time zone')}</div>
@@ -537,7 +573,7 @@ function openCustomer(c, { target = dlg, onSaved } = {}) {
   const x = c || {};
   openDialog(target, `<form class="dlg-body" id="cust-form">${head(isNew ? 'New customer' : esc(x.name))}
     <div class="grid2"><label>Name<input name="name" required value="${esc(x.name)}" autocomplete="off"></label><label>Phone<input name="phone" type="tel" value="${esc(x.phone)}"></label></div>
-    <div class="grid2"><label>Email<input name="email" type="email" value="${esc(x.email)}"></label><label>Service address<input name="address" value="${esc(x.address)}" placeholder="Start typing the address" data-addr list="addr-list" autocomplete="off"></label></div>
+    <div class="grid2"><label>Email<input name="email" type="email" value="${esc(x.email)}"></label><label>Service address<input name="address" value="${esc(x.address)}" placeholder="Start typing the address" data-addr autocomplete="off"></label></div>
     <label>Notes<textarea name="notes" rows="3" placeholder="Gate codes, equipment, preferences">${esc(x.notes)}</textarea></label>
     <div class="actions">${isNew ? '' : '<button type="button" class="btn danger spacer" id="cust-del">Delete</button>'}<button type="button" class="btn" data-close>Cancel</button>${isNew ? '' : '<button type="button" class="btn" id="cust-job">New job</button>'}<button class="btn primary" type="submit">Save</button></div></form>`);
   const form = $('#cust-form', target);
@@ -655,10 +691,10 @@ function openJob(order, prefill = {}) {
 const distCache = new Map();
 function mileagePanelHtml(p) {
   return `<div class="inline-box"><div class="section-title">Mileage</div>
-    <label>Drive starts from<input id="${p}-from" placeholder="Start typing the address" data-addr list="addr-list" autocomplete="off"></label>
-    <div class="travel-row" style="grid-template-columns:150px auto auto minmax(0,1fr)"><label>One-way miles<input id="${p}-miles" type="number" min="0" step="0.1"></label><button type="button" class="btn" id="${p}-calc">Calculate</button><button type="button" class="btn" id="${p}-addmiles">Update mileage charge</button><span class="hint" id="${p}-mileshint"></span></div>
-    <div class="grid2"><label class="check"><input type="checkbox" id="${p}-round" checked> Round trip (charge both ways)</label><label class="check"><input type="checkbox" id="${p}-logtrip" checked> Log it in Mileage for my tax deduction</label></div>
-    <p class="hint">Mileage is added automatically for every service except remote work. If you drove from somewhere else, change the starting address.</p></div>`;
+    <label>Drive starts from<input id="${p}-from" placeholder="Start typing the address" data-addr autocomplete="off"></label>
+    <div class="travel-row" style="grid-template-columns:150px auto auto minmax(0,1fr)"><label>One-way miles<input id="${p}-miles" type="number" min="0" step="0.1"></label><button type="button" class="btn" id="${p}-calc">Calculate</button><button type="button" class="btn" id="${p}-addmiles">Update travel charge</button><span class="hint" id="${p}-mileshint"></span></div>
+    <div class="grid2"><label class="check"><input type="checkbox" id="${p}-round" checked> Count both ways for my deduction</label><label class="check"><input type="checkbox" id="${p}-logtrip" checked> Log it in Mileage (tax tracker)</label></div>
+    <p class="hint">The travel charge is added automatically for every service except remote work, using your travel rules (free within the free range, then the round trip at your travel rate). The IRS mileage rate is only used for your tax deduction. If you drove from somewhere else, change the starting address.</p></div>`;
 }
 function wireMileage(c) {
   const { p, items, ed, onTotal, customerEl, dateEl, minutesEl } = c;
@@ -684,16 +720,18 @@ function wireMileage(c) {
     if (!distCache.has(key)) distCache.set(key, await api('/distance?from=' + encodeURIComponent(fromEl.value.trim()) + '&to=' + encodeURIComponent(cust.address)));
     return distCache.get(key);
   }
-  function setLine(one) {
-    const round = roundEl.checked;
-    const total = Math.round(one * (round ? 2 : 1) * 10) / 10;
-    const line = { desc: `Mileage (${total} mi${round ? ' round trip' : ''})`, billing: 'Custom', rate: r2(rate()), qty: total, kind: 'mileage' };
+  function setLine(one, minutes = num(minutesEl && minutesEl.value)) {
+    if (!minutes) { say('Enter the one-way drive minutes to price the travel.'); return; }
+    const t = travelCharge(minutes, state.settings);
+    const base = travelItem(minutes);
+    const line = { ...base, kind: 'mileage', desc: `Travel (${one} mi, ${minutes} min each way${t.free ? ', no charge' : ', ' + t.minutes + ' min billed'})` };
     busy = true;
     const i = items.findIndex(x => x.kind === 'mileage');
     if (i >= 0) items.splice(i, 1, line); else items.push(line);
     ed.render(); onTotal();
     busy = false; hadLine = true;
-    say(`${total} mi at ${rate().toFixed(3)} per mile`);
+    say(t.free ? 'Within the free range, no travel charge.' : `Travel charge ${money(t.amount)} (${t.minutes} min round trip)`);
+    const round = roundEl.checked;
     if (logEl.checked) {
       const cust = customer();
       pendingTrip = { date: dateEl.value || todayStr(), customer_id: cust ? cust.id : null, from_addr: fromEl.value, to_addr: cust ? cust.address : '', miles: one, round_trip: round, purpose: 'Customer visit' };
@@ -706,7 +744,7 @@ function wireMileage(c) {
       const d = await lookup();
       fillMinutes(d);
       milesEl.value = d.miles;
-      if (billable() && (!hasLine() || c.replace)) setLine(d.miles);
+      if (billable() && (!hasLine() || c.replace)) setLine(d.miles, d.minutes);
     } catch (e) { say(e.message); } finally { looking = false; c.replace = false; }
   }
   function onItems() {
@@ -920,7 +958,7 @@ function openTrip(trip) {
   const x = trip ? { ...trip } : { date: todayStr(), customer_id: '', from_addr: state.settings.home_address || '', to_addr: '', miles: '', round_trip: true, purpose: 'Customer visit' };
   openDialog(dlg, `<form class="dlg-body" id="trip-form">${head(isNew ? 'Log trip' : 'Trip')}
     <div class="grid2"><label>Date<input name="date" type="date" required value="${esc(x.date)}"></label><label>Customer<select name="customer_id" id="t-customer">${customerOptions(x.customer_id)}</select></label></div>
-    <div class="grid2"><label>From<input name="from_addr" value="${esc(x.from_addr)}" placeholder="Starting address" data-addr list="addr-list" autocomplete="off"></label><label>To<input name="to_addr" id="t-to" value="${esc(x.to_addr)}" placeholder="Destination address" data-addr list="addr-list" autocomplete="off"></label></div>
+    <div class="grid2"><label>From<input name="from_addr" value="${esc(x.from_addr)}" placeholder="Starting address" data-addr autocomplete="off"></label><label>To<input name="to_addr" id="t-to" value="${esc(x.to_addr)}" placeholder="Destination address" data-addr autocomplete="off"></label></div>
     <div class="grid3"><label>Miles (one way)<input name="miles" type="number" step="0.1" min="0" required value="${esc(x.miles)}"></label><label>Purpose<input name="purpose" value="${esc(x.purpose)}"></label><label class="check" style="align-self:end;min-height:44px"><input type="checkbox" name="round_trip"${x.round_trip ? ' checked' : ''}> Round trip (count both ways)</label></div>
     <p class="hint" id="t-preview"></p>
     <div class="actions">${isNew ? '' : '<button type="button" class="btn danger spacer" id="t-del">Delete</button>'}<button type="button" class="btn" data-close>Cancel</button><button class="btn primary" type="submit">Save trip</button></div></form>`);
