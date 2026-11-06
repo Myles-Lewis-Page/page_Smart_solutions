@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Invoice</title>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700&family=Hanken+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root { --ink:#12201f; --muted:#586966; --line:#d6dfdc; --accent:#0b6e63; --ok:#157347; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:#eef2f1; color:var(--ink); font:15px/1.5 'Hanken Grotesk', system-ui, sans-serif; }
+  .bar { display:flex; gap:10px; justify-content:center; padding:14px; }
+  .bar button { font:600 15px 'Hanken Grotesk', sans-serif; padding:10px 18px; border-radius:8px; border:1px solid var(--accent); background:var(--accent); color:#fff; cursor:pointer; }
+  .sheet { position:relative; max-width:800px; margin:0 auto 40px; background:#fff; padding:48px; border:1px solid var(--line); }
+  header { display:flex; justify-content:space-between; gap:24px; flex-wrap:wrap; border-bottom:3px solid var(--accent); padding-bottom:20px; }
+  h1 { font:700 28px 'Bricolage Grotesque', sans-serif; margin:0; letter-spacing:-0.01em; }
+  .muted { color:var(--muted); }
+  .doc { text-align:right; }
+  .doc .t { font:500 13px 'IBM Plex Mono', monospace; letter-spacing:.1em; text-transform:uppercase; color:var(--accent); }
+  .doc .n { font:700 22px 'Bricolage Grotesque', sans-serif; }
+  .meta { display:grid; grid-template-columns:1fr 1fr; gap:24px; margin:24px 0; }
+  .label { font:500 11px 'IBM Plex Mono', monospace; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); margin-bottom:4px; }
+  table { width:100%; border-collapse:collapse; }
+  th { text-align:left; font:500 11px 'IBM Plex Mono', monospace; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); border-bottom:1px solid var(--ink); padding:8px 6px; }
+  td { padding:10px 6px; border-bottom:1px solid var(--line); vertical-align:top; }
+  .r { text-align:right; font-family:'IBM Plex Mono', monospace; white-space:nowrap; }
+  .totals { margin:16px 0 0 auto; width:min(300px,100%); }
+  .totals div { display:flex; justify-content:space-between; padding:4px 6px; }
+  .totals .grand { font:700 20px 'Bricolage Grotesque', sans-serif; border-top:2px solid var(--ink); margin-top:6px; padding-top:10px; }
+  .note { margin-top:28px; white-space:pre-wrap; }
+  .stamp { position:absolute; right:48px; top:150px; transform:rotate(-10deg); border:4px solid var(--ok); color:var(--ok); font:700 34px 'Bricolage Grotesque', sans-serif; letter-spacing:.12em; padding:2px 16px; border-radius:6px; opacity:.85; }
+  footer { margin-top:36px; padding-top:14px; border-top:1px solid var(--line); text-align:center; color:var(--muted); font-size:13px; }
+  @media (max-width:600px) { .sheet { padding:22px; } .meta { grid-template-columns:1fr; } .stamp { right:20px; top:120px; font-size:26px; } }
+  @media print { body { background:#fff; } .bar { display:none; } .sheet { border:0; margin:0; max-width:none; padding:0; } @page { margin:18mm; } }
+</style>
+</head>
+<body>
+<div class="bar"><button onclick="window.print()">Print or save as PDF</button></div>
+<main class="sheet" id="sheet"><p class="muted">Loading...</p></main>
+<script>
+(function () {
+  var esc = function (v) { return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); };
+  var money = function (n) { return Number(n || 0).toLocaleString('en-US', { style: 'currency', currency: 'USD' }); };
+  var date = function (d) { var p = String(d || '').split('-'); return p.length === 3 ? p[1] + '/' + p[2] + '/' + p[0] : ''; };
+  var id = new URLSearchParams(location.search).get('id');
+  var sheet = document.getElementById('sheet');
+  Promise.all([
+    fetch('/api/invoices/' + encodeURIComponent(id), { credentials: 'same-origin' }),
+    fetch('/api/settings', { credentials: 'same-origin' })
+  ]).then(function (rs) {
+    if (rs[0].status === 401) { location.href = '/admin'; throw new Error('auth'); }
+    if (!rs[0].ok) throw new Error('Invoice not found.');
+    return Promise.all([rs[0].json(), rs[1].json()]);
+  }).then(function (d) {
+    var inv = d[0], s = d[1], c = inv.customer || {};
+    var paid = inv.status === 'Paid';
+    document.title = (paid ? 'Receipt ' : 'Invoice ') + inv.number;
+    var rows = (inv.items || []).map(function (it) {
+      var qty = it.billing === 'Hourly' ? it.qty + ' hr' : it.qty;
+      return '<tr><td>' + esc(it.desc) + '</td><td class="r">' + money(it.rate) + '</td><td class="r">' + esc(qty) + '</td><td class="r">' + money(it.rate * it.qty) + '</td></tr>';
+    }).join('');
+    var phones = [s.business_phone, s.business_phone_2].filter(Boolean).map(esc).join(' &middot; ');
+    sheet.innerHTML =
+      (paid ? '<div class="stamp">PAID</div>' : '') +
+      '<header><div><h1>' + esc(s.business_name) + '</h1><div class="muted">' + esc(s.business_tagline) + '</div>' +
+      '<div class="muted">' + esc(s.business_address) + '</div>' +
+      (phones ? '<div class="muted">' + phones + '</div>' : '') +
+      (s.business_email ? '<div class="muted">' + esc(s.business_email) + '</div>' : '') + '</div>' +
+      '<div class="doc"><div class="t">' + (paid ? 'Receipt' : 'Invoice') + '</div><div class="n">' + esc(inv.number) + '</div>' +
+      '<div class="muted">Issued ' + date(inv.issue_date) + '</div>' +
+      (paid ? '<div class="muted">Paid ' + date(inv.paid_date) + (inv.payment_method ? ' by ' + esc(inv.payment_method) : '') + '</div>'
+            : (inv.due_date ? '<div class="muted">Due ' + date(inv.due_date) + '</div>' : '')) + '</div></header>' +
+      '<section class="meta"><div><div class="label">Billed to</div><div><b>' + esc(c.name || '') + '</b></div>' +
+      (c.address ? '<div class="muted">' + esc(c.address) + '</div>' : '') +
+      (c.phone ? '<div class="muted">' + esc(c.phone) + '</div>' : '') +
+      (c.email ? '<div class="muted">' + esc(c.email) + '</div>' : '') + '</div>' +
+      '<div><div class="label">' + (paid ? 'Status' : 'Amount due') + '</div><div style="font:700 24px \'Bricolage Grotesque\',sans-serif">' + (paid ? 'Paid in full' : money(inv.total)) + '</div></div></section>' +
+      '<table><thead><tr><th>Description</th><th class="r">Rate</th><th class="r">Qty</th><th class="r">Amount</th></tr></thead><tbody>' + rows + '</tbody></table>' +
+      '<div class="totals"><div><span>Subtotal</span><span class="r">' + money(inv.subtotal) + '</span></div>' +
+      (inv.discount > 0 ? '<div><span>Discount</span><span class="r">- ' + money(inv.discount) + '</span></div>' : '') +
+      (inv.tax > 0 ? '<div><span>Sales tax (' + inv.tax_rate + '%)</span><span class="r">' + money(inv.tax) + '</span></div>' : '') +
+      '<div class="grand"><span>Total</span><span>' + money(inv.total) + '</span></div></div>' +
+      (inv.notes ? '<div class="note">' + esc(inv.notes) + '</div>' : '') +
+      (!paid && s.payment_instructions ? '<div class="note"><div class="label">How to pay</div>' + esc(s.payment_instructions) + '</div>' : '') +
+      '<footer>Thank you for your business.</footer>';
+  }).catch(function (e) { if (e.message !== 'auth') sheet.innerHTML = '<p>' + esc(e.message) + '</p>'; });
+})();
+</script>
+</body>
+</html>

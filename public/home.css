@@ -1,0 +1,105 @@
+/* Public homepage. Layout concept: a rate card on graph paper. */
+.home { background-color: var(--bg); }
+
+.top { position: sticky; top: 0; z-index: 20; background: color-mix(in srgb, var(--bg) 92%, transparent); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); }
+.bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 64px; }
+.brand { display: inline-flex; align-items: center; gap: 10px; text-decoration: none; color: var(--ink); }
+.brand:hover { color: var(--ink); }
+.mark { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 8px; background: var(--ink); color: var(--bg); font: 600 12px/1 var(--font-mono); letter-spacing: 0.04em; }
+.brand-name { font: 700 17px/1.1 var(--font-display); }
+.top nav { display: flex; align-items: center; gap: 22px; }
+.top nav a:not(.btn) { color: var(--ink); text-decoration: none; font-weight: 500; font-size: 15px; }
+.top nav a:not(.btn):hover { color: var(--accent); }
+
+/* Hero */
+.hero {
+  background-image:
+    linear-gradient(var(--grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+  background-size: 32px 32px;
+  border-bottom: 1px solid var(--line);
+}
+.hero-grid { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr); gap: 40px; align-items: center; padding-block: 72px; }
+.eyebrow { font: 500 13px/1.4 var(--font-mono); color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 18px; }
+.hero h1 { font-size: clamp(2.4rem, 5.6vw, 4.2rem); font-weight: 700; margin-bottom: 20px; }
+.lede { font-size: 1.15rem; max-width: 34em; color: var(--ink); margin-bottom: 28px; }
+.cta { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 22px; }
+.free-note { display: flex; align-items: center; gap: 10px; font: 500 14px/1.4 var(--font-mono); color: var(--muted); }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); flex: none; }
+
+/* Network diagram */
+.hero-art { min-width: 0; }
+.diagram { width: 100%; height: auto; display: block; }
+.diagram .links path { fill: none; stroke: var(--accent); stroke-width: 2; stroke-dasharray: 6 8; animation: flow 1.6s linear infinite; }
+.diagram .node rect { fill: var(--surface); stroke: var(--ink); stroke-width: 1.5; }
+.diagram .node text { font: 500 11px var(--font-mono); fill: var(--ink); letter-spacing: 0.05em; }
+.diagram .hub rect { fill: var(--accent); stroke: var(--accent); }
+.diagram .hub text { fill: var(--accent-ink); font-weight: 600; }
+.diagram .pulse circle { fill: none; stroke: var(--accent); stroke-width: 2; transform-origin: 260px 200px; animation: ping 2.8s ease-out infinite; }
+.diagram .pulse circle:nth-child(2) { animation-delay: 1.4s; }
+@keyframes flow { to { stroke-dashoffset: -28; } }
+@keyframes ping { from { transform: scale(1); opacity: 0.7; } to { transform: scale(3.4); opacity: 0; } }
+
+/* Sections */
+.section { padding-block: 72px; }
+.section.alt { background: var(--surface-2); border-block: 1px solid var(--line); }
+.section-head { max-width: 40em; margin-bottom: 36px; display: grid; gap: 10px; }
+.section-head h2, .travel h2, .contact h2 { font-size: clamp(1.8rem, 3.4vw, 2.5rem); }
+.section-head p { color: var(--muted); }
+
+/* Rate card */
+.rate-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 40px 56px; }
+.rate-group h3 { font: 600 13px/1.2 var(--font-mono); text-transform: uppercase; letter-spacing: 0.1em; color: var(--accent); padding-bottom: 12px; border-bottom: 2px solid var(--ink); margin-bottom: 4px; }
+.rates { list-style: none; margin: 0; padding: 0; }
+.rates li { display: flex; align-items: baseline; gap: 8px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.r-name { display: grid; gap: 2px; min-width: 0; flex: 0 1 auto; }
+.r-name span { font-weight: 600; }
+.r-name small { color: var(--muted); font-size: 13.5px; line-height: 1.4; }
+.leader { flex: 1 1 16px; min-width: 16px; border-bottom: 2px dotted var(--line); transform: translateY(-5px); }
+.r-price { font-family: var(--font-mono); white-space: nowrap; text-align: right; flex: none; }
+.r-price b { font-weight: 500; font-size: 1.05rem; }
+.r-price i { font-style: normal; color: var(--muted); font-size: 0.82rem; }
+.r-price em { font-style: normal; color: var(--signal); font-size: 0.8rem; }
+
+/* Travel */
+.travel { display: grid; grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr); gap: 40px; align-items: start; }
+.travel p { color: var(--muted); margin-top: 10px; max-width: 26em; }
+.travel-rules { margin: 0; padding: 0; list-style: none; display: grid; gap: 12px; }
+.travel-rules li { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; }
+
+/* Contact */
+.contact { display: grid; grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr); gap: 48px; align-items: start; }
+.contact-info { display: grid; gap: 22px; }
+.contact-info > p { color: var(--muted); max-width: 28em; }
+.reach h3 { font: 600 12px/1.2 var(--font-mono); text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); margin-bottom: 6px; }
+.numbers { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.numbers a, .reach a { font: 600 1.35rem/1.3 var(--font-display); text-decoration: none; color: var(--ink); }
+.numbers a:hover, .reach a:hover { color: var(--accent); }
+.reach p { font-size: 1.05rem; }
+.form { display: grid; gap: 16px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 24px; box-shadow: var(--shadow); }
+.form .row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.hp { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
+.form-note { min-height: 1.4em; font-size: 14.5px; }
+.form-note.ok { color: var(--ok); font-weight: 600; }
+.form-note.err { color: var(--danger); font-weight: 600; }
+
+.foot { border-top: 1px solid var(--line); padding-block: 24px; color: var(--muted); font-size: 14px; }
+.foot-bar { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; }
+
+@media (max-width: 860px) {
+  .hero-grid, .travel, .contact { grid-template-columns: minmax(0, 1fr); }
+  .hero-grid { padding-block: 44px; gap: 28px; }
+  .hero-art { order: -1; max-width: 420px; }
+  .rate-grid { grid-template-columns: minmax(0, 1fr); gap: 32px; }
+  .section { padding-block: 52px; }
+}
+@media (max-width: 560px) {
+  .top nav a:not(.btn) { display: none; }
+  .brand-name { font-size: 15px; }
+  .form .row { grid-template-columns: minmax(0, 1fr); }
+  .form { padding: 18px; }
+  .rates li { flex-wrap: wrap; }
+  .leader { display: none; }
+  .r-name { flex: 1 1 100%; }
+  .r-price { text-align: left; }
+}
