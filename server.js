@@ -271,6 +271,21 @@ function createApp() {
   app.get('/print', (req, res) => { res.set('X-Robots-Tag', 'noindex'); sendWeb('print.html', res); });
   WEB_FILES.filter(f => f !== 'admin.html' && f !== 'print.html').forEach(f => app.get('/' + f, (req, res) => sendWeb(f, res)));
 
+  // Driving distance (OpenStreetMap geocoding + OSRM routing), used to auto-fill miles and drive time
+  const geoCache = new Map();
+  const geocode = async place => {
+    const key = place.trim().toLowerCase();
+    if (geoCache.has(key)) return geoCache.get(key);
+    const r = await fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=us&q=' + encodeURIComponent(place), {
+      headers: { 'User-Agent': 'PageSmartSolutionsAdmin/1.0' }, signal: AbortSignal.timeout(8000),
+    });
+    const hit = (await r.json())[0];
+    if (!hit) throw new Error('not found');
+    const pt = [hit.lon, hit.lat];
+    geoCache.set(key, pt);
+    return pt;
+  };
+
   // Public API
   app.post('/api/contact', limiter(5, 3600 * 1000), ah(async (req, res) => {
     const b = req.body || {};
@@ -551,6 +566,21 @@ function createApp() {
   }));
 
   // Dashboard
+  app.get('/api/distance', ah(async (req, res) => {
+    const from = String(req.query.from || '').slice(0, 300);
+    const to = String(req.query.to || '').slice(0, 300);
+    if (!from || !to) throw httpError(400, 'Both a starting address and a destination are needed.');
+    try {
+      const [a, b] = await Promise.all([geocode(from), geocode(to)]);
+      const r = await fetch(`https://router.project-osrm.org/route/v1/driving/${a[0]},${a[1]};${b[0]},${b[1]}?overview=false`, { signal: AbortSignal.timeout(8000) });
+      const route = (await r.json()).routes?.[0];
+      if (!route) throw new Error('no route');
+      res.json({ miles: Math.round((route.distance / 1609.344) * 10) / 10, minutes: Math.max(1, Math.round(route.duration / 60)) });
+    } catch (e) {
+      throw httpError(502, 'Could not look up that distance. Check both addresses, or type the miles yourself.');
+    }
+  }));
+
   app.get('/api/dashboard', ah(async (req, res) => {
     const s = await getSettings();
     const today = todayStr(s);

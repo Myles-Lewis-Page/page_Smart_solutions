@@ -132,7 +132,7 @@ function createItemEditor(root, items, onChange) {
       <input data-f="desc" value="${esc(it.desc)}" aria-label="Description" placeholder="Description">
       <select data-f="billing" aria-label="Billing type">${opts(BILLING, it.billing)}</select>
       <input data-f="rate" type="number" step="0.01" min="0" value="${esc(it.rate)}" aria-label="Rate">
-      <input data-f="qty" type="number" step="0.25" min="0" value="${esc(it.qty)}" aria-label="Quantity or hours">
+      <input data-f="qty" type="number" step="any" min="0" value="${esc(it.qty)}" aria-label="Quantity or hours">
       <output>${money(r2(num(it.rate) * num(it.qty)))}</output>
       <button type="button" class="icon-btn" data-rm="${i}" aria-label="Remove line">&times;</button>
     </div>`;
@@ -543,6 +543,8 @@ function openJob(order, prefill = {}) {
     <div class="grid2"><label>Date<input name="service_date" type="date" value="${esc(o.service_date)}"></label><label>Status<select name="status">${opts(ORDER_STATUS, o.status)}</select></label></div>
     <div class="section-title">Line items</div><div id="j-items"></div>
     <div class="travel-row"><label>One-way drive (min)<input id="j-minutes" type="number" min="0" step="1" value="${esc(o.one_way_minutes ?? '')}"></label><button type="button" class="btn" id="j-addtravel">Add travel charge</button><span class="hint" id="j-travelhint"></span></div>
+    <div class="travel-row" style="grid-template-columns:150px auto auto minmax(0,1fr)"><label>One-way miles<input id="j-miles" type="number" min="0" step="0.1"></label><button type="button" class="btn" id="j-calc">Calculate</button><button type="button" class="btn" id="j-addmiles">Add mileage charge</button><span class="hint" id="j-mileshint"></span></div>
+    <div class="grid2"><label class="check"><input type="checkbox" id="j-round" checked> Round trip (charge both ways)</label><label class="check"><input type="checkbox" id="j-logtrip" checked> Also log it in Mileage for my tax deduction</label></div>
     <div class="section-title">Parts and equipment bought for this job</div>
     <div class="receipts" id="j-parts"></div>
     <div><button type="button" class="btn" id="j-addpart">Add equipment purchase</button></div>
@@ -570,11 +572,46 @@ function openJob(order, prefill = {}) {
     title: form.elements.title.value, customer_id: form.elements.customer_id.value || null, service_date: form.elements.service_date.value,
     status: form.elements.status.value, notes: form.elements.notes.value, one_way_minutes: $('#j-minutes').value || null, items: o.items,
   });
+  let pendingTrip = null;
   const save = async () => {
     const saved = isNew ? await api('/orders', { method: 'POST', body: collect() }) : await api('/orders/' + o.id, { method: 'PUT', body: collect() });
     if (isNew) { isNew = false; o.id = saved.id; }
+    if (pendingTrip) { const t = { ...pendingTrip, order_id: o.id }; pendingTrip = null; await api('/mileage', { method: 'POST', body: t }); }
     return saved;
   };
+  const jobRate = () => rateOn(form.elements.service_date.value || todayStr(), state.mileage.rates);
+  const showRate = () => { $('#j-mileshint').textContent = `Charged at ${jobRate().toFixed(3)} per mile (IRS rate on the job date).`; };
+  reload('mileage', 'settings').then(showRate).catch(() => {});
+  form.elements.service_date.addEventListener('change', showRate);
+  const calcMiles = async () => {
+    const cust = findBy(state.customers, form.elements.customer_id.value);
+    if (!cust || !cust.address) throw new Error('Pick a customer with a service address first.');
+    if (!state.settings.home_address) throw new Error('Add your starting address in Settings first.');
+    const btn = $('#j-calc');
+    btn.disabled = true; btn.textContent = 'Looking up...';
+    try {
+      const d = await api('/distance?from=' + encodeURIComponent(state.settings.home_address) + '&to=' + encodeURIComponent(cust.address));
+      $('#j-miles').value = d.miles;
+      $('#j-minutes').value = d.minutes;
+      $('#j-travelhint').textContent = travelHint(d.minutes);
+      return d;
+    } finally { btn.disabled = false; btn.textContent = 'Calculate'; }
+  };
+  $('#j-calc').addEventListener('click', guard(async () => { const d = await calcMiles(); toast(`${d.miles} miles, about ${d.minutes} minutes each way`); }));
+  $('#j-addmiles').addEventListener('click', guard(async () => {
+    if (!num($('#j-miles').value)) await calcMiles();
+    const one = num($('#j-miles').value);
+    if (!one) throw new Error('Enter the one-way miles.');
+    const round = $('#j-round').checked;
+    const total = Math.round(one * (round ? 2 : 1) * 10) / 10;
+    const rate = jobRate();
+    ed.add({ desc: `Mileage (${total} mi${round ? ' round trip' : ''})`, billing: 'Custom', rate: r2(rate), qty: total, kind: 'custom' });
+    if ($('#j-logtrip').checked) {
+      const cust = findBy(state.customers, form.elements.customer_id.value);
+      pendingTrip = { date: form.elements.service_date.value || todayStr(), customer_id: cust ? cust.id : null, from_addr: state.settings.home_address || '', to_addr: cust ? cust.address : '', miles: one, round_trip: round, purpose: 'Customer visit' };
+    }
+    toast('Mileage charge added. Click Save job.');
+  }));
   const renderParts = () => {
     const list = o.id ? state.expenses.filter(x => x.order_id === o.id) : [];
     const cost = r2(list.reduce((t, x) => t + x.amount, 0));

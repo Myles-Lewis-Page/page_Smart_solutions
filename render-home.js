@@ -114,7 +114,7 @@ function renderHome(s, services) {
           <a class="btn primary" href="#contact">Contact me</a>
           ${phoneLinks}
         </div>
-        <p class="free-note"><span class="dot" aria-hidden="true"></span>${freeMin ? `Travel is free within ${freeMin} minutes of Georgetown.` : 'Travel is billed from when I leave.'}</p>
+        <p class="free-note"><span class="dot" aria-hidden="true"></span>${freeMin ? `Travel is free within ${freeMin} minutes of my home base.` : 'Travel is billed from when I leave.'}</p>
       </div>
       <div class="hero-art">${DIAGRAM}</div>
     </div>
@@ -137,7 +137,7 @@ function renderHome(s, services) {
         <p>Drive time is shown on the invoice as its own line, so there are no surprises.</p>
       </div>
       <ol class="travel-rules">
-        <li><b>Within ${freeMin} minutes</b> of Georgetown: no travel charge.</li>
+        <li><b>Within ${freeMin} minutes</b> of my home base: no travel charge.</li>
         <li><b>Farther out:</b> round trip is billed at ${money(rate)} per hour, rounded to the nearest ${round} minutes, with a ${round} minute minimum.</li>
         ${minHrs ? `<li><b>On-site visits</b> have a ${minHrs} hour minimum, then ${round} minute increments.</li>` : ''}
         <li><b>Remote support</b> has no travel charge.</li>
