@@ -92,11 +92,8 @@ const dlg = $('#dlg');
 const dlg2 = $('#dlg2');
 function openDialog(el, html) { el.innerHTML = html; if (!el.open) el.showModal(); }
 function closeDialog(el) { if (el.open) el.close(); }
-[dlg, dlg2].forEach(d => d.addEventListener('click', e => {
-  if (e.target !== d) return;
-  const r = d.getBoundingClientRect(); // only a click outside the box counts as a backdrop click
-  if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) d.close();
-}));
+// Dialogs close only from their own Close, X or Save buttons, never from a stray click or the Escape key.
+[dlg, dlg2].forEach(d => d.addEventListener('cancel', e => e.preventDefault()));
 
 function confirmDelete(btn, fn) {
   btn.addEventListener('click', guard(async () => {
