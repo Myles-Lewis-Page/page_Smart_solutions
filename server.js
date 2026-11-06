@@ -273,18 +273,32 @@ function createApp() {
 
   // Driving distance (OpenStreetMap geocoding + OSRM routing), used to auto-fill miles and drive time
   const geoCache = new Map();
+  const UA = { 'User-Agent': 'PageSmartSolutionsAdmin/1.0' };
+  const getJson = async (url, opt = {}) => {
+    const r = await fetch(url, { ...opt, signal: AbortSignal.timeout(8000) });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.json();
+  };
+  const geocoders = [
+    async q => { const hit = (await getJson('https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=us&q=' + encodeURIComponent(q), { headers: UA }))[0]; return hit ? [hit.lon, hit.lat] : null; },
+    async q => { const f = ((await getJson('https://photon.komoot.io/api/?limit=1&q=' + encodeURIComponent(q), { headers: UA })).features || [])[0]; return f ? f.geometry.coordinates : null; },
+  ];
   const geocode = async place => {
     const key = place.trim().toLowerCase();
     if (geoCache.has(key)) return geoCache.get(key);
-    const r = await fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=us&q=' + encodeURIComponent(place), {
-      headers: { 'User-Agent': 'PageSmartSolutionsAdmin/1.0' }, signal: AbortSignal.timeout(8000),
-    });
-    const hit = (await r.json())[0];
-    if (!hit) throw new Error('not found');
-    const pt = [hit.lon, hit.lat];
-    geoCache.set(key, pt);
-    return pt;
+    const noUnit = place.replace(/[,\s]+(apt|apartment|unit|suite|ste|bldg|building|#)\.?\s*[\w-]+/ig, '').replace(/\s+#\s*[\w-]+/g, '');
+    const variants = [...new Set([place.trim(), noUnit.trim()])];
+    for (const v of variants) {
+      for (const g of geocoders) {
+        try { const pt = await g(v); if (pt) { geoCache.set(key, pt); return pt; } } catch (e) { console.error('geocode failed:', e.message); }
+      }
+    }
+    return null;
   };
+  const routers = [
+    (a, b) => `https://router.project-osrm.org/route/v1/driving/${a[0]},${a[1]};${b[0]},${b[1]}?overview=false`,
+    (a, b) => `https://routing.openstreetmap.de/routed-car/route/v1/driving/${a[0]},${a[1]};${b[0]},${b[1]}?overview=false`,
+  ];
 
   // Public API
   app.post('/api/contact', limiter(5, 3600 * 1000), ah(async (req, res) => {
@@ -566,40 +580,61 @@ function createApp() {
   }));
 
   // Dashboard
+  // Address suggestions: Google Places when GOOGLE_MAPS_API_KEY is set, free OpenStreetMap (Photon) otherwise.
+  async function googleSuggest(input) {
+    const r = await fetch('https://places.googleapis.com/v1/places:autocomplete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': process.env.GOOGLE_MAPS_API_KEY },
+      body: JSON.stringify({
+        input, includedRegionCodes: ['us'], includedPrimaryTypes: ['street_address', 'premise', 'subpremise'],
+        locationBias: { circle: { center: { latitude: 30.63, longitude: -97.68 }, radius: 50000 } },
+      }),
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!r.ok) throw new Error('google ' + r.status);
+    const data = await r.json();
+    return (data.suggestions || []).map(x => x.placePrediction && x.placePrediction.text && x.placePrediction.text.text).filter(Boolean).map(t => t.replace(/, USA$/, ''));
+  }
+  async function photonSuggest(input) {
+    const r = await fetch('https://photon.komoot.io/api/?limit=6&lang=en&lat=30.63&lon=-97.68&q=' + encodeURIComponent(input), { headers: { 'User-Agent': 'PageSmartSolutionsAdmin/1.0' }, signal: AbortSignal.timeout(5000) });
+    const data = await r.json();
+    const seen = new Set();
+    const out = [];
+    for (const f of data.features || []) {
+      const p = f.properties || {};
+      if (p.countrycode && p.countrycode !== 'US') continue;
+      const street = p.housenumber && p.street ? `${p.housenumber} ${p.street}` : (p.street || p.name || '');
+      const label = [street, p.city || p.locality || p.county, [p.state, p.postcode].filter(Boolean).join(' ')].filter(Boolean).join(', ');
+      if (!street || seen.has(label)) continue;
+      seen.add(label);
+      out.push(label);
+    }
+    return out;
+  }
   app.get('/api/address', ah(async (req, res) => {
-    const q0 = String(req.query.q || '').trim().slice(0, 150);
-    if (q0.length < 3) return res.json([]);
-    try {
-      const r = await fetch('https://photon.komoot.io/api/?limit=6&lang=en&lat=30.63&lon=-97.68&q=' + encodeURIComponent(q0), { headers: { 'User-Agent': 'PageSmartSolutionsAdmin/1.0' }, signal: AbortSignal.timeout(5000) });
-      const data = await r.json();
-      const seen = new Set();
-      const out = [];
-      for (const f of data.features || []) {
-        const p = f.properties || {};
-        if (p.countrycode && p.countrycode !== 'US') continue;
-        const street = p.housenumber && p.street ? `${p.housenumber} ${p.street}` : (p.street || p.name || '');
-        const label = [street, p.city || p.locality || p.county, [p.state, p.postcode].filter(Boolean).join(' ')].filter(Boolean).join(', ');
-        if (!street || seen.has(label)) continue;
-        seen.add(label);
-        out.push(label);
-      }
-      res.json(out);
-    } catch (e) { res.json([]); }
+    const input = String(req.query.q || '').trim().slice(0, 150);
+    if (input.length < 3) return res.json([]);
+    if (process.env.GOOGLE_MAPS_API_KEY) {
+      try { return res.json(await googleSuggest(input)); } catch (e) { console.error('Google address lookup failed:', e.message); }
+    }
+    try { res.json(await photonSuggest(input)); } catch (e) { res.json([]); }
   }));
 
   app.get('/api/distance', ah(async (req, res) => {
     const from = String(req.query.from || '').slice(0, 300);
     const to = String(req.query.to || '').slice(0, 300);
     if (!from || !to) throw httpError(400, 'Both a starting address and a destination are needed.');
-    try {
-      const [a, b] = await Promise.all([geocode(from), geocode(to)]);
-      const r = await fetch(`https://router.project-osrm.org/route/v1/driving/${a[0]},${a[1]};${b[0]},${b[1]}?overview=false`, { signal: AbortSignal.timeout(8000) });
-      const route = (await r.json()).routes?.[0];
-      if (!route) throw new Error('no route');
-      res.json({ miles: Math.round((route.distance / 1609.344) * 10) / 10, minutes: Math.max(1, Math.round(route.duration / 60)) });
-    } catch (e) {
-      throw httpError(502, 'Could not look up that distance. Check both addresses, or type the miles yourself.');
+    const a = await geocode(from);
+    if (!a) throw httpError(422, `Could not find the starting address "${from}". Pick it from the suggestions or add the city and state.`);
+    const b = await geocode(to);
+    if (!b) throw httpError(422, `Could not find the customer address "${to}". Pick it from the suggestions or add the city and state.`);
+    for (const url of routers) {
+      try {
+        const route = (await getJson(url(a, b))).routes?.[0];
+        if (route) return res.json({ miles: Math.round((route.distance / 1609.344) * 10) / 10, minutes: Math.max(1, Math.round(route.duration / 60)) });
+      } catch (e) { console.error('routing failed:', e.message); }
     }
+    throw httpError(422, 'Found both addresses but the driving route service did not answer. Try again in a moment, or type the miles yourself.');
   }));
 
   app.get('/api/dashboard', ah(async (req, res) => {
