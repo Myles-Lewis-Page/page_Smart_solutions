@@ -693,8 +693,8 @@ function mileagePanelHtml(p) {
   return `<div class="inline-box"><div class="section-title">Mileage</div>
     <label>Drive starts from<input id="${p}-from" placeholder="Start typing the address" data-addr autocomplete="off"></label>
     <div class="travel-row" style="grid-template-columns:150px auto auto minmax(0,1fr)"><label>One-way miles<input id="${p}-miles" type="number" min="0" step="0.1"></label><button type="button" class="btn" id="${p}-calc">Calculate</button><button type="button" class="btn" id="${p}-addmiles">Update travel charge</button><span class="hint" id="${p}-mileshint"></span></div>
-    <div class="grid2"><label class="check"><input type="checkbox" id="${p}-round" checked> Count both ways for my deduction</label><label class="check"><input type="checkbox" id="${p}-logtrip" checked> Log it in Mileage (tax tracker)</label></div>
-    <p class="hint">The travel charge is added automatically for every service except remote work, using your travel rules (free within the free range, then the round trip at your travel rate). The IRS mileage rate is only used for your tax deduction. If you drove from somewhere else, change the starting address.</p></div>`;
+    <input type="checkbox" id="${p}-round" checked hidden><input type="checkbox" id="${p}-logtrip" checked hidden>
+    <p class="hint">The travel charge is added automatically for every service except remote work, using your travel rules (free within the free range, then the round trip at your travel rate). Every trip is counted round trip and logged in Mileage at the IRS rate for your tax deduction only. If you drove from somewhere else, change the starting address.</p></div>`;
 }
 function wireMileage(c) {
   const { p, items, ed, onTotal, customerEl, dateEl, minutesEl } = c;
