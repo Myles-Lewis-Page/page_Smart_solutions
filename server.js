@@ -1,6 +1,7 @@
 'use strict';
 const express = require('express');
 const crypto = require('crypto');
+const fs = require('fs');
 const path = require('path');
 const db = require('./db');
 const { computeTax, newTaxYear } = require('./tax');
@@ -262,8 +263,13 @@ function createApp() {
   }));
   app.get('/contact', (req, res) => res.redirect(302, '/#contact'));
   app.get('/prices', (req, res) => res.redirect(302, '/#services'));
-  app.get('/admin', (req, res) => res.set('X-Robots-Tag', 'noindex').sendFile(path.join(__dirname, 'public', 'admin.html')));
-  app.use(express.static(path.join(__dirname, 'public'), { extensions: ['html'], index: false }));
+  // Web files live in public/ or, when uploaded flat, next to server.js. Only these names are served.
+  const WEB_FILES = ['base.css', 'home.css', 'contact.js', 'admin.html', 'admin.css', 'admin.js', 'print.html'];
+  const webDir = fs.existsSync(path.join(__dirname, 'public', 'base.css')) ? path.join(__dirname, 'public') : __dirname;
+  const sendWeb = (name, res) => res.sendFile(path.join(webDir, name));
+  app.get('/admin', (req, res) => { res.set('X-Robots-Tag', 'noindex'); sendWeb('admin.html', res); });
+  app.get('/print', (req, res) => { res.set('X-Robots-Tag', 'noindex'); sendWeb('print.html', res); });
+  WEB_FILES.filter(f => f !== 'admin.html' && f !== 'print.html').forEach(f => app.get('/' + f, (req, res) => sendWeb(f, res)));
 
   // Public API
   app.post('/api/contact', limiter(5, 3600 * 1000), ah(async (req, res) => {
