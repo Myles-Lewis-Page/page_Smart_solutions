@@ -97,6 +97,7 @@ function renderHome(s, services) {
     <nav aria-label="Main">
       <a href="#services">Services</a>
       <a href="#travel">Travel</a>
+      <a class="btn small" href="/admin" rel="nofollow">Admin login</a>
       <a class="btn small primary" href="#contact">Contact me</a>
     </nav>
   </div>
@@ -180,7 +181,7 @@ function renderHome(s, services) {
 <footer class="foot">
   <div class="wrap foot-bar">
     <span>&copy; ${new Date().getFullYear()} ${name}</span>
-    <span>${area}</span>
+    <span>${area} &middot; <a href="/admin" rel="nofollow">Admin login</a></span>
   </div>
 </footer>
 <script src="/contact.js" defer></script>

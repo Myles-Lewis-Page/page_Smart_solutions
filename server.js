@@ -327,6 +327,11 @@ function createApp() {
     const r = await q('INSERT INTO services(category,name,info,billing,price,price_label,active,sort) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *', [...serviceBody(req.body), max + 10]);
     res.json(r.rows[0]);
   }));
+  app.put('/api/services-order', ah(async (req, res) => {
+    const ids = Array.isArray(req.body.ids) ? req.body.ids.map(Number).filter(Number.isInteger) : [];
+    for (let i = 0; i < ids.length; i++) await q('UPDATE services SET sort=$1 WHERE id=$2', [(i + 1) * 10, ids[i]]);
+    res.json((await q('SELECT * FROM services ORDER BY sort, id')).rows);
+  }));
   app.put('/api/services/:id', ah(async (req, res) => {
     const r = await q('UPDATE services SET category=$1,name=$2,info=$3,billing=$4,price=$5,price_label=$6,active=$7 WHERE id=$8 RETURNING *', [...serviceBody(req.body), Number(req.params.id)]);
     if (!r.rows[0]) throw httpError(404, 'Not found');

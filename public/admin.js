@@ -462,8 +462,8 @@ VIEWS.services = async main => {
       <div class="head-actions"><a class="btn" href="/#services" target="_blank" rel="noopener">View on site</a><button class="btn primary" data-act="new-service">Add service</button></div></div>
     <div class="panel" style="margin-bottom:20px"><div class="body"><b>Travel:</b> free within ${esc(st.travel_free_minutes)} minutes one way. Beyond that, the round trip is billed at ${money(st.travel_rate)}/hr, rounded to the nearest ${esc(st.travel_round_minutes)} minutes. On-site minimum ${esc(st.onsite_minimum_hours)} hour. <a href="#/settings">Change in Settings</a></div></div>
     <div style="display:grid;gap:20px">
-    ${groups.map(g => `<section><h2 class="section-title" style="margin-bottom:8px">${esc(g.name)}</h2><div class="table-wrap"><table><thead><tr><th>Service</th><th>Details</th><th>Billing</th><th class="num">Price</th><th></th></tr></thead><tbody>
-      ${g.items.map(s => `<tr data-row data-act="open-service" data-id="${s.id}" class="${s.active ? '' : 'dim'}"><td><b>${esc(s.name)}</b></td><td class="muted">${esc(s.info)}</td><td>${esc(s.billing)}</td><td class="num">${priceCell(s)}</td><td>${s.active ? '' : chip('Hidden')}</td></tr>`).join('')}
+    ${groups.map((g, gi) => `<section><div style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><h2 class="section-title" style="margin:0">${esc(g.name)}</h2><button type="button" class="icon-btn" style="width:32px;height:32px;font-size:15px" data-act="grp-up" data-cat="${esc(g.name)}" aria-label="Move group up"${gi === 0 ? ' disabled' : ''}>&uarr;</button><button type="button" class="icon-btn" style="width:32px;height:32px;font-size:15px" data-act="grp-down" data-cat="${esc(g.name)}" aria-label="Move group down"${gi === groups.length - 1 ? ' disabled' : ''}>&darr;</button></div><div class="table-wrap"><table><thead><tr><th>Order</th><th>Service</th><th>Details</th><th>Billing</th><th class="num">Price</th><th></th></tr></thead><tbody>
+      ${g.items.map((s, k) => `<tr data-row data-act="open-service" data-id="${s.id}" class="${s.active ? '' : 'dim'}"><td style="white-space:nowrap"><button type="button" class="icon-btn" style="width:32px;height:32px;font-size:15px" data-act="svc-up" data-id="${s.id}" aria-label="Move up"${k === 0 ? ' disabled' : ''}>&uarr;</button> <button type="button" class="icon-btn" style="width:32px;height:32px;font-size:15px" data-act="svc-down" data-id="${s.id}" aria-label="Move down"${k === g.items.length - 1 ? ' disabled' : ''}>&darr;</button></td><td><b>${esc(s.name)}</b></td><td class="muted">${esc(s.info)}</td><td>${esc(s.billing)}</td><td class="num">${priceCell(s)}</td><td>${s.active ? '' : chip('Hidden')}</td></tr>`).join('')}
     </tbody></table></div></section>`).join('')}</div>`;
 };
 
@@ -802,6 +802,33 @@ function openInquiry(q) {
 /* =====================================================================
    Actions, routing, login
    ===================================================================== */
+const saveServiceOrder = guard(async ids => {
+  state.services = await api('/services-order', { method: 'PUT', body: { ids } });
+  route();
+});
+function serviceGroups() {
+  const groups = [];
+  state.services.forEach(s => { let g = groups.find(x => x.name === s.category); if (!g) groups.push((g = { name: s.category, items: [] })); g.items.push(s); });
+  return groups;
+}
+function moveService(id, dir) {
+  const groups = serviceGroups();
+  const g = groups.find(x => x.items.some(s => s.id === id));
+  const i = g.items.findIndex(s => s.id === id);
+  const j = i + dir;
+  if (j < 0 || j >= g.items.length) return;
+  [g.items[i], g.items[j]] = [g.items[j], g.items[i]];
+  saveServiceOrder(groups.flatMap(x => x.items.map(s => s.id)));
+}
+function moveGroup(name, dir) {
+  const groups = serviceGroups();
+  const i = groups.findIndex(g => g.name === name);
+  const j = i + dir;
+  if (i < 0 || j < 0 || j >= groups.length) return;
+  [groups[i], groups[j]] = [groups[j], groups[i]];
+  saveServiceOrder(groups.flatMap(x => x.items.map(s => s.id)));
+}
+
 const ACTIONS = {
   'open-job': t => openJob(findBy(state.orders, t.dataset.id)),
   'new-job': () => openJob(null),
@@ -815,6 +842,10 @@ const ACTIONS = {
   'new-trip': () => openTrip(null),
   'open-service': t => openService(findBy(state.services, t.dataset.id)),
   'new-service': () => openService(null),
+  'svc-up': t => moveService(Number(t.dataset.id), -1),
+  'svc-down': t => moveService(Number(t.dataset.id), 1),
+  'grp-up': t => moveGroup(t.dataset.cat, -1),
+  'grp-down': t => moveGroup(t.dataset.cat, 1),
   'open-inquiry': t => openInquiry(findBy(state.inquiries, t.dataset.id)),
   'add-rate': () => { $('#rates').insertAdjacentHTML('beforeend', rateRow(null)); },
   'rm-rate': t => t.closest('.rate-row').remove(),
