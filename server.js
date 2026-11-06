@@ -52,7 +52,7 @@ function normalizeItems(items) {
     billing: BILLING.includes(it.billing) ? it.billing : 'Flat',
     rate: r2(it.rate),
     qty: Math.max(0, Math.round((Number(it.qty) || 0) * 100) / 100),
-    kind: ['service', 'travel', 'custom'].includes(it.kind) ? it.kind : 'custom',
+    kind: ['service', 'travel', 'custom', 'mileage'].includes(it.kind) ? it.kind : 'custom',
     service_id: Number.isInteger(it.service_id) ? it.service_id : null,
   })).filter(it => it.desc || it.rate || it.qty);
 }
@@ -334,12 +334,12 @@ function createApp() {
   const serviceBody = b => {
     const price = b.price === '' || b.price == null ? null : r2(b.price);
     if (!str(b.name)) throw httpError(400, 'Service name is required.');
-    return [str(b.category, 80) || 'Other', str(b.name, 150), str(b.info, 300), BILLING.includes(b.billing) ? b.billing : 'Flat', price, str(b.price_label, 40), b.active === false ? false : true];
+    return [str(b.category, 80) || 'Other', str(b.name, 150), str(b.info, 300), BILLING.includes(b.billing) ? b.billing : 'Flat', price, str(b.price_label, 40), b.active === false ? false : true, !!b.no_travel];
   };
   app.get('/api/services', ah(async (req, res) => res.json((await q('SELECT * FROM services ORDER BY sort, id')).rows)));
   app.post('/api/services', ah(async (req, res) => {
     const max = (await q('SELECT COALESCE(MAX(sort),0)::int AS m FROM services')).rows[0].m;
-    const r = await q('INSERT INTO services(category,name,info,billing,price,price_label,active,sort) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *', [...serviceBody(req.body), max + 10]);
+    const r = await q('INSERT INTO services(category,name,info,billing,price,price_label,active,no_travel,sort) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *', [...serviceBody(req.body), max + 10]);
     res.json(r.rows[0]);
   }));
   app.put('/api/services-order', ah(async (req, res) => {
@@ -348,7 +348,7 @@ function createApp() {
     res.json((await q('SELECT * FROM services ORDER BY sort, id')).rows);
   }));
   app.put('/api/services/:id', ah(async (req, res) => {
-    const r = await q('UPDATE services SET category=$1,name=$2,info=$3,billing=$4,price=$5,price_label=$6,active=$7 WHERE id=$8 RETURNING *', [...serviceBody(req.body), Number(req.params.id)]);
+    const r = await q('UPDATE services SET category=$1,name=$2,info=$3,billing=$4,price=$5,price_label=$6,active=$7,no_travel=$8 WHERE id=$9 RETURNING *', [...serviceBody(req.body), Number(req.params.id)]);
     if (!r.rows[0]) throw httpError(404, 'Not found');
     res.json(r.rows[0]);
   }));
@@ -379,16 +379,16 @@ function createApp() {
   const withTotal = o => ({ ...o, total: r2((o.items || []).reduce((sum, it) => sum + lineTotal(it), 0)) });
   const orderBody = b => {
     const items = normalizeItems(b.items);
-    return [intOrNull(b.customer_id), str(b.title, 200), ORDER_STATUS.includes(b.status) ? b.status : 'Requested', dateOr(b.service_date), JSON.stringify(items), str(b.notes, 2000), intOrNull(b.one_way_minutes)];
+    return [intOrNull(b.customer_id), str(b.title, 200), ORDER_STATUS.includes(b.status) ? b.status : 'Requested', dateOr(b.service_date), JSON.stringify(items), str(b.notes, 2000), intOrNull(b.one_way_minutes), str(b.from_addr, 300), b.one_way_miles === '' || b.one_way_miles == null ? null : Math.max(0, Math.round(Number(b.one_way_miles) * 10) / 10) || null];
   };
   app.get('/api/orders', ah(async (req, res) => res.json((await q(ORDER_SELECT + ' ORDER BY o.service_date DESC, o.id DESC')).rows.map(withTotal))));
   app.post('/api/orders', ah(async (req, res) => {
-    const r = await q('INSERT INTO orders(customer_id,title,status,service_date,items,notes,one_way_minutes) VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7) RETURNING id', orderBody(req.body));
+    const r = await q('INSERT INTO orders(customer_id,title,status,service_date,items,notes,one_way_minutes,from_addr,one_way_miles) VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9) RETURNING id', orderBody(req.body));
     res.json(withTotal((await q(ORDER_SELECT + ' WHERE o.id=$1', [r.rows[0].id])).rows[0]));
   }));
   app.put('/api/orders/:id', ah(async (req, res) => {
     const id = Number(req.params.id);
-    const r = await q('UPDATE orders SET customer_id=$1,title=$2,status=$3,service_date=$4,items=$5::jsonb,notes=$6,one_way_minutes=$7 WHERE id=$8 RETURNING id', [...orderBody(req.body), id]);
+    const r = await q('UPDATE orders SET customer_id=$1,title=$2,status=$3,service_date=$4,items=$5::jsonb,notes=$6,one_way_minutes=$7,from_addr=$8,one_way_miles=$9 WHERE id=$10 RETURNING id', [...orderBody(req.body), id]);
     if (!r.rows[0]) throw httpError(404, 'Not found');
     res.json(withTotal((await q(ORDER_SELECT + ' WHERE o.id=$1', [id])).rows[0]));
   }));

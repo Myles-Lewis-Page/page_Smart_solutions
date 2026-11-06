@@ -463,7 +463,7 @@ VIEWS.services = async main => {
     <div class="panel" style="margin-bottom:20px"><div class="body"><b>Travel:</b> free within ${esc(st.travel_free_minutes)} minutes one way. Beyond that, the round trip is billed at ${money(st.travel_rate)}/hr, rounded to the nearest ${esc(st.travel_round_minutes)} minutes. On-site minimum ${esc(st.onsite_minimum_hours)} hour. <a href="#/settings">Change in Settings</a></div></div>
     <div style="display:grid;gap:20px">
     ${groups.map((g, gi) => `<section><div style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><h2 class="section-title" style="margin:0">${esc(g.name)}</h2><button type="button" class="icon-btn" style="width:32px;height:32px;font-size:15px" data-act="grp-up" data-cat="${esc(g.name)}" aria-label="Move group up"${gi === 0 ? ' disabled' : ''}>&uarr;</button><button type="button" class="icon-btn" style="width:32px;height:32px;font-size:15px" data-act="grp-down" data-cat="${esc(g.name)}" aria-label="Move group down"${gi === groups.length - 1 ? ' disabled' : ''}>&darr;</button></div><div class="table-wrap"><table><thead><tr><th>Order</th><th>Service</th><th>Details</th><th>Billing</th><th class="num">Price</th><th></th></tr></thead><tbody>
-      ${g.items.map((s, k) => `<tr data-row data-act="open-service" data-id="${s.id}" class="${s.active ? '' : 'dim'}"><td style="white-space:nowrap"><button type="button" class="icon-btn" style="width:32px;height:32px;font-size:15px" data-act="svc-up" data-id="${s.id}" aria-label="Move up"${k === 0 ? ' disabled' : ''}>&uarr;</button> <button type="button" class="icon-btn" style="width:32px;height:32px;font-size:15px" data-act="svc-down" data-id="${s.id}" aria-label="Move down"${k === g.items.length - 1 ? ' disabled' : ''}>&darr;</button></td><td><b>${esc(s.name)}</b></td><td class="muted">${esc(s.info)}</td><td>${esc(s.billing)}</td><td class="num">${priceCell(s)}</td><td>${s.active ? '' : chip('Hidden')}</td></tr>`).join('')}
+      ${g.items.map((s, k) => `<tr data-row data-act="open-service" data-id="${s.id}" class="${s.active ? '' : 'dim'}"><td style="white-space:nowrap"><button type="button" class="icon-btn" style="width:32px;height:32px;font-size:15px" data-act="svc-up" data-id="${s.id}" aria-label="Move up"${k === 0 ? ' disabled' : ''}>&uarr;</button> <button type="button" class="icon-btn" style="width:32px;height:32px;font-size:15px" data-act="svc-down" data-id="${s.id}" aria-label="Move down"${k === g.items.length - 1 ? ' disabled' : ''}>&darr;</button></td><td><b>${esc(s.name)}</b></td><td class="muted">${esc(s.info)}</td><td>${esc(s.billing)}</td><td class="num">${priceCell(s)}</td><td>${s.active ? '' : chip('Hidden')}${s.no_travel ? chip('No mileage') : ''}</td></tr>`).join('')}
     </tbody></table></div></section>`).join('')}</div>`;
 };
 
@@ -543,8 +543,7 @@ function openJob(order, prefill = {}) {
     <div class="grid2"><label>Date<input name="service_date" type="date" value="${esc(o.service_date)}"></label><label>Status<select name="status">${opts(ORDER_STATUS, o.status)}</select></label></div>
     <div class="section-title">Line items</div><div id="j-items"></div>
     <div class="travel-row"><label>One-way drive (min)<input id="j-minutes" type="number" min="0" step="1" value="${esc(o.one_way_minutes ?? '')}"></label><button type="button" class="btn" id="j-addtravel">Add travel charge</button><span class="hint" id="j-travelhint"></span></div>
-    <div class="travel-row" style="grid-template-columns:150px auto auto minmax(0,1fr)"><label>One-way miles<input id="j-miles" type="number" min="0" step="0.1"></label><button type="button" class="btn" id="j-calc">Calculate</button><button type="button" class="btn" id="j-addmiles">Add mileage charge</button><span class="hint" id="j-mileshint"></span></div>
-    <div class="grid2"><label class="check"><input type="checkbox" id="j-round" checked> Round trip (charge both ways)</label><label class="check"><input type="checkbox" id="j-logtrip" checked> Also log it in Mileage for my tax deduction</label></div>
+    ${mileagePanelHtml('j')}
     <div class="section-title">Parts and equipment bought for this job</div>
     <div class="receipts" id="j-parts"></div>
     <div><button type="button" class="btn" id="j-addpart">Add equipment purchase</button></div>
@@ -557,8 +556,9 @@ function openJob(order, prefill = {}) {
       ${o.invoice_id ? '<button type="button" class="btn" id="j-viewinv">View invoice</button>' : '<button type="button" class="btn" id="j-inv">Create invoice</button><button type="button" class="btn" id="j-paidbtn">Paid in full</button>'}
       <button class="btn primary" type="submit">Save job</button></div></form>`);
   const form = $('#job-form', dlg);
+  let mil = null;
   const updateTotal = () => { $('#j-total').textContent = money(sumItems(o.items)); };
-  const ed = createItemEditor($('#j-items', dlg), o.items, updateTotal);
+  const ed = createItemEditor($('#j-items', dlg), o.items, () => { updateTotal(); if (mil) mil.onItems(); });
   updateTotal();
   $('#j-travelhint').textContent = travelHint($('#j-minutes').value);
   $('#j-minutes').addEventListener('input', e => { $('#j-travelhint').textContent = travelHint(e.target.value); });
@@ -567,51 +567,22 @@ function openJob(order, prefill = {}) {
     if (!m) { toast('Enter the one-way drive time in minutes first.', 'err'); return; }
     ed.add(travelItem(m));
   });
-  $('#j-newcust').addEventListener('click', () => openCustomer(null, { target: dlg2, onSaved: c => { $('#j-customer').innerHTML = customerOptions(c.id); } }));
+  $('#j-newcust').addEventListener('click', () => openCustomer(null, { target: dlg2, onSaved: c => { const sel = $('#j-customer'); sel.innerHTML = customerOptions(c.id); sel.dispatchEvent(new Event('change')); } }));
   const collect = () => ({
     title: form.elements.title.value, customer_id: form.elements.customer_id.value || null, service_date: form.elements.service_date.value,
     status: form.elements.status.value, notes: form.elements.notes.value, one_way_minutes: $('#j-minutes').value || null, items: o.items,
+    from_addr: $('#j-from').value, one_way_miles: $('#j-miles').value || null,
   });
-  let pendingTrip = null;
   const save = async () => {
     const saved = isNew ? await api('/orders', { method: 'POST', body: collect() }) : await api('/orders/' + o.id, { method: 'PUT', body: collect() });
     if (isNew) { isNew = false; o.id = saved.id; }
-    if (pendingTrip) { const t = { ...pendingTrip, order_id: o.id }; pendingTrip = null; await api('/mileage', { method: 'POST', body: t }); }
+    const trip = mil && mil.takeTrip();
+    if (trip) await api('/mileage', { method: 'POST', body: { ...trip, order_id: o.id } });
     return saved;
   };
-  const jobRate = () => rateOn(form.elements.service_date.value || todayStr(), state.mileage.rates);
-  const showRate = () => { $('#j-mileshint').textContent = `Charged at ${jobRate().toFixed(3)} per mile (IRS rate on the job date).`; };
-  reload('mileage', 'settings').then(showRate).catch(() => {});
-  form.elements.service_date.addEventListener('change', showRate);
-  const calcMiles = async () => {
-    const cust = findBy(state.customers, form.elements.customer_id.value);
-    if (!cust || !cust.address) throw new Error('Pick a customer with a service address first.');
-    if (!state.settings.home_address) throw new Error('Add your starting address in Settings first.');
-    const btn = $('#j-calc');
-    btn.disabled = true; btn.textContent = 'Looking up...';
-    try {
-      const d = await api('/distance?from=' + encodeURIComponent(state.settings.home_address) + '&to=' + encodeURIComponent(cust.address));
-      $('#j-miles').value = d.miles;
-      $('#j-minutes').value = d.minutes;
-      $('#j-travelhint').textContent = travelHint(d.minutes);
-      return d;
-    } finally { btn.disabled = false; btn.textContent = 'Calculate'; }
-  };
-  $('#j-calc').addEventListener('click', guard(async () => { const d = await calcMiles(); toast(`${d.miles} miles, about ${d.minutes} minutes each way`); }));
-  $('#j-addmiles').addEventListener('click', guard(async () => {
-    if (!num($('#j-miles').value)) await calcMiles();
-    const one = num($('#j-miles').value);
-    if (!one) throw new Error('Enter the one-way miles.');
-    const round = $('#j-round').checked;
-    const total = Math.round(one * (round ? 2 : 1) * 10) / 10;
-    const rate = jobRate();
-    ed.add({ desc: `Mileage (${total} mi${round ? ' round trip' : ''})`, billing: 'Custom', rate: r2(rate), qty: total, kind: 'custom' });
-    if ($('#j-logtrip').checked) {
-      const cust = findBy(state.customers, form.elements.customer_id.value);
-      pendingTrip = { date: form.elements.service_date.value || todayStr(), customer_id: cust ? cust.id : null, from_addr: state.settings.home_address || '', to_addr: cust ? cust.address : '', miles: one, round_trip: round, purpose: 'Customer visit' };
-    }
-    toast('Mileage charge added. Click Save job.');
-  }));
+  reload('mileage', 'settings', 'services', 'customers').then(() => {
+    mil = wireMileage({ p: 'j', items: o.items, ed, onTotal: updateTotal, customerEl: $('#j-customer'), dateEl: form.elements.service_date, minutesEl: $('#j-minutes'), from: o.from_addr, miles: o.one_way_miles });
+  }).catch(() => {});
   const renderParts = () => {
     const list = o.id ? state.expenses.filter(x => x.order_id === o.id) : [];
     const cost = r2(list.reduce((t, x) => t + x.amount, 0));
@@ -655,6 +626,99 @@ function openJob(order, prefill = {}) {
     }));
   }
   if (!isNew) confirmDelete($('#j-del'), async () => { await api('/orders/' + o.id, { method: 'DELETE' }); await reload('orders', 'invoices'); closeDialog(dlg); toast('Job deleted'); route(); });
+}
+
+/* ---- Mileage charge (shared by jobs and invoices) ---- */
+const distCache = new Map();
+function mileagePanelHtml(p) {
+  return `<div class="inline-box"><div class="section-title">Mileage</div>
+    <label>Drive starts from<input id="${p}-from" placeholder="Your starting address"></label>
+    <div class="travel-row" style="grid-template-columns:150px auto auto minmax(0,1fr)"><label>One-way miles<input id="${p}-miles" type="number" min="0" step="0.1"></label><button type="button" class="btn" id="${p}-calc">Calculate</button><button type="button" class="btn" id="${p}-addmiles">Update mileage charge</button><span class="hint" id="${p}-mileshint"></span></div>
+    <div class="grid2"><label class="check"><input type="checkbox" id="${p}-round" checked> Round trip (charge both ways)</label><label class="check"><input type="checkbox" id="${p}-logtrip" checked> Log it in Mileage for my tax deduction</label></div>
+    <p class="hint">Mileage is added automatically for every service except remote work. If you drove from somewhere else, change the starting address.</p></div>`;
+}
+function wireMileage(c) {
+  const { p, items, ed, onTotal, customerEl, dateEl, minutesEl } = c;
+  const $e = id => $('#' + p + '-' + id, dlg);
+  const fromEl = $e('from'), milesEl = $e('miles'), roundEl = $e('round'), logEl = $e('logtrip'), hint = $e('mileshint');
+  fromEl.value = c.from || state.settings.home_address || '';
+  if (c.miles) milesEl.value = c.miles;
+  let busy = false, looking = false, dismissed = false, pendingTrip = null;
+  let hadLine = items.some(i => i.kind === 'mileage');
+  if (hadLine) logEl.checked = false;
+  const customer = () => findBy(state.customers, customerEl.value);
+  const rate = () => rateOn(dateEl.value || todayStr(), state.mileage.rates);
+  const say = t => { hint.textContent = t; };
+  const billable = () => items.some(i => i.kind === 'service' && i.service_id && !(findBy(state.services, i.service_id) || {}).no_travel);
+  const hasLine = () => items.some(i => i.kind === 'mileage');
+  const fillMinutes = d => { if (minutesEl) { minutesEl.value = d.minutes; minutesEl.dispatchEvent(new Event('input')); } };
+
+  async function lookup() {
+    const cust = customer();
+    if (!cust || !cust.address) throw new Error("Pick a customer with a service address to charge mileage.");
+    if (!fromEl.value.trim()) throw new Error('Enter where the drive starts.');
+    const key = fromEl.value.trim().toLowerCase() + '|' + cust.address.trim().toLowerCase();
+    if (!distCache.has(key)) distCache.set(key, await api('/distance?from=' + encodeURIComponent(fromEl.value.trim()) + '&to=' + encodeURIComponent(cust.address)));
+    return distCache.get(key);
+  }
+  function setLine(one) {
+    const round = roundEl.checked;
+    const total = Math.round(one * (round ? 2 : 1) * 10) / 10;
+    const line = { desc: `Mileage (${total} mi${round ? ' round trip' : ''})`, billing: 'Custom', rate: r2(rate()), qty: total, kind: 'mileage' };
+    busy = true;
+    const i = items.findIndex(x => x.kind === 'mileage');
+    if (i >= 0) items.splice(i, 1, line); else items.push(line);
+    ed.render(); onTotal();
+    busy = false; hadLine = true;
+    say(`${total} mi at ${rate().toFixed(3)} per mile`);
+    if (logEl.checked) {
+      const cust = customer();
+      pendingTrip = { date: dateEl.value || todayStr(), customer_id: cust ? cust.id : null, from_addr: fromEl.value, to_addr: cust ? cust.address : '', miles: one, round_trip: round, purpose: 'Customer visit' };
+    } else pendingTrip = null;
+  }
+  async function autoFill() {
+    if (looking) return;
+    looking = true;
+    try {
+      const d = await lookup();
+      fillMinutes(d);
+      milesEl.value = d.miles;
+      if (billable() && (!hasLine() || c.replace)) setLine(d.miles);
+    } catch (e) { say(e.message); } finally { looking = false; c.replace = false; }
+  }
+  function onItems() {
+    if (busy) return;
+    const has = hasLine();
+    if (hadLine && !has) dismissed = true;
+    hadLine = has;
+    if (!billable()) {
+      if (has) {
+        busy = true;
+        for (let i = items.length - 1; i >= 0; i--) if (items[i].kind === 'mileage') items.splice(i, 1);
+        ed.render(); onTotal();
+        busy = false; hadLine = false; pendingTrip = null;
+        say('No mileage charge for remote-only work.');
+      }
+      return;
+    }
+    if (!has && !dismissed) autoFill();
+  }
+  const refresh = () => { dismissed = false; if (billable()) { c.replace = true; autoFill(); } };
+  customerEl.addEventListener('change', refresh);
+  fromEl.addEventListener('change', refresh);
+  dateEl.addEventListener('change', () => { if (hasLine() && num(milesEl.value)) setLine(num(milesEl.value)); });
+  roundEl.addEventListener('change', () => { if (hasLine() && num(milesEl.value)) setLine(num(milesEl.value)); });
+  $e('calc').addEventListener('click', guard(async () => {
+    const btn = $e('calc'); btn.disabled = true; btn.textContent = 'Looking up...';
+    try { const d = await lookup(); milesEl.value = d.miles; fillMinutes(d); toast(`${d.miles} miles, about ${d.minutes} minutes each way`); }
+    finally { btn.disabled = false; btn.textContent = 'Calculate'; }
+  }));
+  $e('addmiles').addEventListener('click', guard(async () => {
+    if (!num(milesEl.value)) { const d = await lookup(); milesEl.value = d.miles; fillMinutes(d); }
+    dismissed = false;
+    setLine(num(milesEl.value));
+  }));
+  return { onItems, takeTrip() { const t = pendingTrip; pendingTrip = null; return t; } };
 }
 
 /* ---- Equipment bought for a job ---- */
@@ -717,6 +781,7 @@ function openInvoice(inv, prefill = {}) {
       <label class="i-paid">Payment method<select name="payment_method"><option value="">Choose</option>${opts(PAY_METHODS, o.payment_method)}</select></label></div>
     <div class="section-title">Line items</div><div id="i-items"></div>
     <div class="travel-row"><label>One-way drive (min)<input id="i-minutes" type="number" min="0" step="1"></label><button type="button" class="btn" id="i-addtravel">Add travel charge</button><span class="hint" id="i-travelhint"></span></div>
+    ${mileagePanelHtml('i')}
     <div class="grid2"><label>Notes (shown on the invoice)<textarea name="notes" rows="3">${esc(o.notes)}</textarea></label>
       <div style="display:grid;gap:12px"><label>Discount ($)<input name="discount" type="number" step="0.01" min="0" value="${esc(o.discount)}"></label><label>Sales tax %<input name="tax_rate" type="number" step="0.01" min="0" value="${esc(o.tax_rate)}"></label></div></div>
     <div class="totals" id="i-totals"></div>
@@ -727,7 +792,11 @@ function openInvoice(inv, prefill = {}) {
     const t = invoiceTotals(o.items, el.discount.value, el.tax_rate.value);
     $('#i-totals').innerHTML = `<div><span>Subtotal</span><span>${money(t.subtotal)}</span></div>${t.disc ? `<div><span>Discount</span><span>- ${money(t.disc)}</span></div>` : ''}${t.tax ? `<div><span>Sales tax</span><span>${money(t.tax)}</span></div>` : ''}<div class="grand"><span>Total</span><span>${money(t.total)}</span></div>`;
   };
-  const ed = createItemEditor($('#i-items', dlg), o.items, updateTotals);
+  let mil = null;
+  const ed = createItemEditor($('#i-items', dlg), o.items, () => { updateTotals(); if (mil) mil.onItems(); });
+  reload('mileage', 'services', 'customers').then(() => {
+    mil = wireMileage({ p: 'i', items: o.items, ed, onTotal: updateTotals, customerEl: $('#i-customer'), dateEl: el.issue_date, minutesEl: $('#i-minutes'), from: '', miles: '' });
+  }).catch(() => {});
   const togglePaid = () => $$('.i-paid', form).forEach(l => { l.hidden = el.status.value !== 'Paid'; });
   el.status.addEventListener('change', togglePaid);
   togglePaid();
@@ -741,13 +810,18 @@ function openInvoice(inv, prefill = {}) {
     if (!m) { toast('Enter the one-way drive time in minutes first.', 'err'); return; }
     ed.add(travelItem(m));
   });
-  $('#i-newcust').addEventListener('click', () => openCustomer(null, { target: dlg2, onSaved: c => { $('#i-customer').innerHTML = customerOptions(c.id); } }));
+  $('#i-newcust').addEventListener('click', () => openCustomer(null, { target: dlg2, onSaved: c => { const sel = $('#i-customer'); sel.innerHTML = customerOptions(c.id); sel.dispatchEvent(new Event('change')); } }));
   const collect = () => ({
     customer_id: el.customer_id.value || null, issue_date: el.issue_date.value, due_date: el.due_date.value, status: el.status.value,
     paid_date: el.paid_date.value, payment_method: el.payment_method.value, notes: el.notes.value, discount: el.discount.value, tax_rate: el.tax_rate.value,
     items: o.items, order_id: o.order_id,
   });
-  const save = () => (isNew ? api('/invoices', { method: 'POST', body: collect() }) : api('/invoices/' + o.id, { method: 'PUT', body: collect() }));
+  const save = async () => {
+    const saved = isNew ? await api('/invoices', { method: 'POST', body: collect() }) : await api('/invoices/' + o.id, { method: 'PUT', body: collect() });
+    const trip = mil && mil.takeTrip();
+    if (trip) await api('/mileage', { method: 'POST', body: { ...trip, order_id: o.order_id || null } });
+    return saved;
+  };
   form.addEventListener('submit', guard(async e => {
     e.preventDefault();
     await save();
@@ -862,12 +936,13 @@ function openService(svc) {
     <label>Details shown to customers<input name="info" value="${esc(x.info)}"></label>
     <div class="grid3"><label>Billing<select name="billing">${opts(BILLING, x.billing)}</select></label><label>Price ($)<input name="price" type="number" step="0.01" min="0" value="${x.price == null ? '' : esc(x.price)}" placeholder="Leave blank for quote"></label><label>Price label<select name="price_label"><option value=""${x.price_label ? '' : ' selected'}>None</option><option${x.price_label === 'Starting at' ? ' selected' : ''}>Starting at</option><option${x.price_label === 'At cost' ? ' selected' : ''}>At cost</option></select></label></div>
     <label class="check"><input type="checkbox" name="active"${x.active ? ' checked' : ''}> Show on the public site and in pickers</label>
+    <label class="check"><input type="checkbox" name="no_travel"${x.no_travel ? ' checked' : ''}> No mileage charge (remote work)</label>
     <div class="actions">${isNew ? '' : '<button type="button" class="btn danger spacer" id="s-del">Delete</button>'}<button type="button" class="btn" data-close>Cancel</button><button class="btn primary" type="submit">Save</button></div></form>`);
   const form = $('#svc-form', dlg);
   form.addEventListener('submit', guard(async e => {
     e.preventDefault();
     const f = form.elements;
-    const body = { name: f.name.value, category: f.category.value, info: f.info.value, billing: f.billing.value, price: f.price.value, price_label: f.price_label.value, active: f.active.checked };
+    const body = { name: f.name.value, category: f.category.value, info: f.info.value, billing: f.billing.value, price: f.price.value, price_label: f.price_label.value, active: f.active.checked, no_travel: f.no_travel.checked };
     if (isNew) await api('/services', { method: 'POST', body }); else await api('/services/' + x.id, { method: 'PUT', body });
     await reload('services');
     closeDialog(dlg);

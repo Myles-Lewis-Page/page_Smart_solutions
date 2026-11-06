@@ -155,6 +155,9 @@ const SCHEMA = [
   `CREATE INDEX IF NOT EXISTS mileage_date_idx ON mileage(date)`,
   `ALTER TABLE expenses ADD COLUMN IF NOT EXISTS order_id INTEGER REFERENCES orders(id) ON DELETE SET NULL`,
   `CREATE INDEX IF NOT EXISTS expenses_order_idx ON expenses(order_id)`,
+  `ALTER TABLE orders ADD COLUMN IF NOT EXISTS from_addr TEXT NOT NULL DEFAULT ''`,
+  `ALTER TABLE orders ADD COLUMN IF NOT EXISTS one_way_miles DOUBLE PRECISION`,
+  `ALTER TABLE services ADD COLUMN IF NOT EXISTS no_travel BOOLEAN NOT NULL DEFAULT FALSE`,
 ];
 
 let client = null;
@@ -204,6 +207,9 @@ async function init() {
       );
     }
   }
+  // One time: remote work carries no mileage or travel charge. After this, the admin controls it per service.
+  const first = await client.query("INSERT INTO settings(key, value) VALUES ('migr_no_travel', '1') ON CONFLICT (key) DO NOTHING RETURNING key");
+  if (first.rows.length) await client.query("UPDATE services SET no_travel = TRUE WHERE name ILIKE 'remote%'");
   return client;
 }
 
