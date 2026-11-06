@@ -443,7 +443,7 @@ function createApp() {
   app.delete('/api/inquiries/:id', ah(async (req, res) => { await q('DELETE FROM inquiries WHERE id=$1', [Number(req.params.id)]); res.json({ ok: true }); }));
 
   // Expenses and receipts
-  const expenseBody = b => [dateOr(b.date), str(b.vendor, 150), str(b.description, 300), str(b.category, 60) || 'Other', r2(b.amount), str(b.payment_method, 40), str(b.reference, 120), intOrNull(b.customer_id), str(b.notes, 1000)];
+  const expenseBody = b => [dateOr(b.date), str(b.vendor, 150), str(b.description, 300), str(b.category, 60) || 'Other', r2(b.amount), str(b.payment_method, 40), str(b.reference, 120), intOrNull(b.customer_id), str(b.notes, 1000), intOrNull(b.order_id)];
   async function expensesWithReceipts(where, params) {
     const rows = (await q(`SELECT e.*, c.name AS customer_name FROM expenses e LEFT JOIN customers c ON c.id = e.customer_id ${where} ORDER BY e.date DESC, e.id DESC`, params)).rows;
     const rec = (await q('SELECT id, expense_id, filename, mime, size FROM receipts ORDER BY id')).rows;
@@ -451,12 +451,14 @@ function createApp() {
   }
   app.get('/api/expenses', ah(async (req, res) => res.json(await expensesWithReceipts('', []))));
   app.post('/api/expenses', ah(async (req, res) => {
-    const r = await q('INSERT INTO expenses(date,vendor,description,category,amount,payment_method,reference,customer_id,notes) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id', expenseBody(req.body));
+    const r = await q('INSERT INTO expenses(date,vendor,description,category,amount,payment_method,reference,customer_id,notes,order_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id', expenseBody(req.body));
     res.json((await expensesWithReceipts('WHERE e.id = $1', [r.rows[0].id]))[0]);
   }));
   app.put('/api/expenses/:id', ah(async (req, res) => {
     const id = Number(req.params.id);
-    const r = await q('UPDATE expenses SET date=$1,vendor=$2,description=$3,category=$4,amount=$5,payment_method=$6,reference=$7,customer_id=$8,notes=$9 WHERE id=$10 RETURNING id', [...expenseBody(req.body), id]);
+    const body = { ...req.body };
+    if (body.order_id === undefined) { const cur = (await q('SELECT order_id FROM expenses WHERE id=$1', [id])).rows[0]; body.order_id = cur ? cur.order_id : null; }
+    const r = await q('UPDATE expenses SET date=$1,vendor=$2,description=$3,category=$4,amount=$5,payment_method=$6,reference=$7,customer_id=$8,notes=$9,order_id=$10 WHERE id=$11 RETURNING id', [...expenseBody(body), id]);
     if (!r.rows[0]) throw httpError(404, 'Not found');
     res.json((await expensesWithReceipts('WHERE e.id = $1', [id]))[0]);
   }));

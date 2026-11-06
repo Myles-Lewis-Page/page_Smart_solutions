@@ -491,7 +491,7 @@ VIEWS.settings = async main => {
       </div></section>
       <section class="panel"><h2>Travel</h2><div class="body" style="display:grid;gap:14px"><div class="grid4">
         ${f('travel_free_minutes', 'Free within (min, one way)', 'min="0"', 'number')}${f('travel_rate', 'Travel rate per hour', 'min="0" step="0.01"', 'number')}${f('travel_round_minutes', 'Round to nearest (min)', 'min="5"', 'number')}${f('onsite_minimum_hours', 'On-site minimum (hours)', 'min="0" step="0.5"', 'number')}
-      </div></div></section>
+      </div><div class="grid4">${f('parts_markup', 'Parts markup % (added to equipment you buy for a job)', 'min="0" step="0.5"', 'number')}</div></div></section>
       <div class="actions" style="justify-content:flex-start"><button class="btn primary" type="submit">Save settings</button></div>
     </form>`;
   $('#settings-form').addEventListener('submit', guard(async e => {
@@ -535,7 +535,7 @@ function openCustomer(c, { target = dlg, onSaved } = {}) {
 
 /* ---- Job ---- */
 function openJob(order, prefill = {}) {
-  const isNew = !order;
+  let isNew = !order;
   const o = order ? JSON.parse(JSON.stringify(order)) : { customer_id: prefill.customer_id || '', title: prefill.title || '', status: 'Requested', service_date: todayStr(), items: [], notes: prefill.notes || '', one_way_minutes: '' };
   openDialog(dlg, `<form class="dlg-body" id="job-form">${head(isNew ? 'New job' : 'Job #' + o.id)}
     <div class="grid2"><label>What is the job?<input name="title" value="${esc(o.title)}" placeholder="Wi-Fi dead zones, new PC setup, smart lock install"></label>
@@ -543,6 +543,9 @@ function openJob(order, prefill = {}) {
     <div class="grid2"><label>Date<input name="service_date" type="date" value="${esc(o.service_date)}"></label><label>Status<select name="status">${opts(ORDER_STATUS, o.status)}</select></label></div>
     <div class="section-title">Line items</div><div id="j-items"></div>
     <div class="travel-row"><label>One-way drive (min)<input id="j-minutes" type="number" min="0" step="1" value="${esc(o.one_way_minutes ?? '')}"></label><button type="button" class="btn" id="j-addtravel">Add travel charge</button><span class="hint" id="j-travelhint"></span></div>
+    <div class="section-title">Parts and equipment bought for this job</div>
+    <div class="receipts" id="j-parts"></div>
+    <div><button type="button" class="btn" id="j-addpart">Add equipment purchase</button></div>
     <label>Notes<textarea name="notes" rows="2" placeholder="Equipment, access, follow-ups">${esc(o.notes)}</textarea></label>
     <div class="totals"><div class="grand"><span>Total</span><span id="j-total"></span></div></div>
     <div class="inline-box" id="j-paid" hidden><div class="section-title">Mark paid in full</div>
@@ -567,7 +570,24 @@ function openJob(order, prefill = {}) {
     title: form.elements.title.value, customer_id: form.elements.customer_id.value || null, service_date: form.elements.service_date.value,
     status: form.elements.status.value, notes: form.elements.notes.value, one_way_minutes: $('#j-minutes').value || null, items: o.items,
   });
-  const save = () => (isNew ? api('/orders', { method: 'POST', body: collect() }) : api('/orders/' + o.id, { method: 'PUT', body: collect() }));
+  const save = async () => {
+    const saved = isNew ? await api('/orders', { method: 'POST', body: collect() }) : await api('/orders/' + o.id, { method: 'PUT', body: collect() });
+    if (isNew) { isNew = false; o.id = saved.id; }
+    return saved;
+  };
+  const renderParts = () => {
+    const list = o.id ? state.expenses.filter(x => x.order_id === o.id) : [];
+    const cost = r2(list.reduce((t, x) => t + x.amount, 0));
+    $('#j-parts').innerHTML = list.length
+      ? list.map(x => `<div class="receipt"><span>${esc(x.vendor)}${x.description ? ': ' + esc(x.description) : ''}</span><span class="num">${money(x.amount)}</span></div>`).join('') + `<p class="hint">Your cost so far: ${money(cost)}. Edit these any time on the Expenses page.</p>`
+      : '<p class="hint">Nothing added yet. Equipment you add here is saved as an expense, with its receipt, and can be billed to the customer on this job.</p>';
+  };
+  if (o.id) reload('expenses').then(renderParts).catch(() => {}); else renderParts();
+  $('#j-addpart').addEventListener('click', guard(async () => {
+    if (isNew) await save();
+    await reload('expenses');
+    openPart(o.id, o.customer_id || null, line => ed.add(line), async () => { await reload('expenses'); renderParts(); });
+  }));
   form.addEventListener('submit', guard(async e => {
     e.preventDefault();
     await save();
@@ -598,6 +618,46 @@ function openJob(order, prefill = {}) {
     }));
   }
   if (!isNew) confirmDelete($('#j-del'), async () => { await api('/orders/' + o.id, { method: 'DELETE' }); await reload('orders', 'invoices'); closeDialog(dlg); toast('Job deleted'); route(); });
+}
+
+/* ---- Equipment bought for a job ---- */
+function openPart(orderId, customerId, addLine, done) {
+  const markup = num(state.settings.parts_markup);
+  openDialog(dlg2, `<form class="dlg-body" id="part-form">${head('Add equipment purchase')}
+    <div class="grid3"><label>Date<input name="date" type="date" required value="${todayStr()}"></label><label>Vendor<input name="vendor" required placeholder="Amazon, Micro Center"></label><label>What you paid ($)<input name="amount" type="number" step="0.01" min="0" required></label></div>
+    <label>What is it?<input name="description" required placeholder="Wi-Fi 7 access point"></label>
+    <div class="grid2"><label>Order or receipt number<input name="reference"></label><label>Paid with<select name="payment_method">${opts(['Card', 'Cash', 'Venmo', 'Zelle', 'Check', 'Other'], 'Card')}</select></label></div>
+    <label>Receipt photo or PDF<input type="file" name="file" accept="image/jpeg,image/png,image/webp,image/heic,application/pdf" multiple></label>
+    <div class="inline-box"><label class="check"><input type="checkbox" name="bill" checked> Bill this to the customer on the job</label>
+      <div class="grid2"><label>Markup %<input name="markup" type="number" step="0.5" min="0" value="${esc(markup)}"></label><label>Customer price<input name="price" type="number" step="0.01" min="0"></label></div>
+      <p class="hint" id="p-hint"></p></div>
+    <div class="actions"><button type="button" class="btn" data-close>Cancel</button><button class="btn primary" type="submit">Save equipment</button></div></form>`);
+  const form = $('#part-form', dlg2);
+  const el = form.elements;
+  const hint = () => { $('#p-hint').textContent = el.bill.checked ? `Cost ${money(num(el.amount.value))}, you charge ${money(num(el.price.value))}, profit ${money(r2(num(el.price.value) - num(el.amount.value)))}.` : 'Saved as an expense only. The customer is not charged.'; };
+  const fromMarkup = () => { el.price.value = r2(num(el.amount.value) * (1 + num(el.markup.value) / 100)).toFixed(2); hint(); };
+  el.amount.addEventListener('input', fromMarkup);
+  el.markup.addEventListener('input', fromMarkup);
+  el.price.addEventListener('input', () => { if (num(el.amount.value)) el.markup.value = r2((num(el.price.value) / num(el.amount.value) - 1) * 100); hint(); });
+  el.bill.addEventListener('change', hint);
+  hint();
+  form.addEventListener('submit', guard(async e => {
+    e.preventDefault();
+    const exp = await api('/expenses', { method: 'POST', body: {
+      date: el.date.value, vendor: el.vendor.value, description: el.description.value, category: 'Equipment & parts',
+      amount: el.amount.value, payment_method: el.payment_method.value, reference: el.reference.value, customer_id: customerId, order_id: orderId, notes: '',
+    } });
+    for (const file of [...el.file.files]) {
+      try {
+        const res = await fetch(`/api/expenses/${exp.id}/receipts`, { method: 'POST', headers: { 'Content-Type': file.type || 'application/octet-stream', 'X-Filename': encodeURIComponent(file.name) }, body: file, credentials: 'same-origin' });
+        if (!res.ok) throw new Error((await res.json()).error);
+      } catch (err) { toast(`${file.name}: ${err.message}`, 'err'); }
+    }
+    if (el.bill.checked && num(el.price.value) > 0) addLine({ desc: el.description.value, billing: 'Flat', rate: r2(num(el.price.value)), qty: 1, kind: 'custom' });
+    closeDialog(dlg2);
+    toast(el.bill.checked ? 'Equipment saved and added to the job. Click Save job.' : 'Equipment saved');
+    await done();
+  }));
 }
 
 /* ---- Invoice ---- */

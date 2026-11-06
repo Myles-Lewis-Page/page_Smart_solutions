@@ -20,6 +20,7 @@ const DEFAULT_SETTINGS = {
   travel_rate: '50',
   travel_round_minutes: '30',
   onsite_minimum_hours: '1',
+  parts_markup: '10',
   timezone: 'America/Chicago',
 };
 
@@ -152,6 +153,8 @@ const SCHEMA = [
   `CREATE INDEX IF NOT EXISTS receipts_expense_idx ON receipts(expense_id)`,
   `CREATE INDEX IF NOT EXISTS expenses_date_idx ON expenses(date)`,
   `CREATE INDEX IF NOT EXISTS mileage_date_idx ON mileage(date)`,
+  `ALTER TABLE expenses ADD COLUMN IF NOT EXISTS order_id INTEGER REFERENCES orders(id) ON DELETE SET NULL`,
+  `CREATE INDEX IF NOT EXISTS expenses_order_idx ON expenses(order_id)`,
 ];
 
 let client = null;
