@@ -40,7 +40,7 @@ const SERVICES = [
   // Fees & Policies (travel is calculated from Settings)
   { category: 'Fees & Policies', name: 'Evening / weekend visit', info: 'Added to the visit total', billing: 'Flat', price: 25 },
   { category: 'Fees & Policies', name: 'Late cancellation / no-show', info: 'Less than 24 hours notice', billing: 'Flat', price: 40 },
-  { category: 'Fees & Policies', name: 'Parts & hardware', info: 'Billed at cost, client may buy directly', billing: 'Custom', price: null, price_label: 'At cost' },
+  { category: 'Fees & Policies', name: 'Parts & hardware', info: 'Parts billed at cost plus 10%, or you may buy them directly', billing: 'Custom', price: null, price_label: 'Cost + 10%' },
 ];
 
 module.exports = { SERVICES };
