@@ -566,6 +566,27 @@ function createApp() {
   }));
 
   // Dashboard
+  app.get('/api/address', ah(async (req, res) => {
+    const q0 = String(req.query.q || '').trim().slice(0, 150);
+    if (q0.length < 3) return res.json([]);
+    try {
+      const r = await fetch('https://photon.komoot.io/api/?limit=6&lang=en&lat=30.63&lon=-97.68&q=' + encodeURIComponent(q0), { headers: { 'User-Agent': 'PageSmartSolutionsAdmin/1.0' }, signal: AbortSignal.timeout(5000) });
+      const data = await r.json();
+      const seen = new Set();
+      const out = [];
+      for (const f of data.features || []) {
+        const p = f.properties || {};
+        if (p.countrycode && p.countrycode !== 'US') continue;
+        const street = p.housenumber && p.street ? `${p.housenumber} ${p.street}` : (p.street || p.name || '');
+        const label = [street, p.city || p.locality || p.county, [p.state, p.postcode].filter(Boolean).join(' ')].filter(Boolean).join(', ');
+        if (!street || seen.has(label)) continue;
+        seen.add(label);
+        out.push(label);
+      }
+      res.json(out);
+    } catch (e) { res.json([]); }
+  }));
+
   app.get('/api/distance', ah(async (req, res) => {
     const from = String(req.query.from || '').slice(0, 300);
     const to = String(req.query.to || '').slice(0, 300);
