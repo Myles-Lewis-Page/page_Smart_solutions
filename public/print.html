@@ -43,16 +43,23 @@
   var esc = function (v) { return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); };
   var money = function (n) { return Number(n || 0).toLocaleString('en-US', { style: 'currency', currency: 'USD' }); };
   var date = function (d) { var p = String(d || '').split('-'); return p.length === 3 ? p[1] + '/' + p[2] + '/' + p[0] : ''; };
+  var pub = location.pathname.indexOf('/i/') === 0;
   var id = new URLSearchParams(location.search).get('id');
   var sheet = document.getElementById('sheet');
-  Promise.all([
-    fetch('/api/invoices/' + encodeURIComponent(id), { credentials: 'same-origin' }),
-    fetch('/api/settings', { credentials: 'same-origin' })
-  ]).then(function (rs) {
-    if (rs[0].status === 401) { location.href = '/admin'; throw new Error('auth'); }
-    if (!rs[0].ok) throw new Error('Invoice not found.');
-    return Promise.all([rs[0].json(), rs[1].json()]);
-  }).then(function (d) {
+  var load = pub
+    ? fetch('/api/public/invoice/' + encodeURIComponent(location.pathname.split('/')[2] || ''), { credentials: 'same-origin' }).then(function (r) {
+        if (!r.ok) throw new Error('This invoice link is not valid.');
+        return r.json();
+      }).then(function (d) { return [d.invoice, d.settings]; })
+    : Promise.all([
+        fetch('/api/invoices/' + encodeURIComponent(id), { credentials: 'same-origin' }),
+        fetch('/api/settings', { credentials: 'same-origin' })
+      ]).then(function (rs) {
+        if (rs[0].status === 401) { location.href = '/admin'; throw new Error('auth'); }
+        if (!rs[0].ok) throw new Error('Invoice not found.');
+        return Promise.all([rs[0].json(), rs[1].json()]);
+      });
+  load.then(function (d) {
     var inv = d[0], s = d[1], c = inv.customer || {};
     var paid = inv.status === 'Paid';
     document.title = (paid ? 'Receipt ' : 'Invoice ') + inv.number;
@@ -62,7 +69,7 @@
     }).join('');
     var phones = [s.business_phone, s.business_phone_2].filter(Boolean).map(esc).join(' &middot; ');
     sheet.innerHTML =
-      (paid ? '<div class="stamp">PAID</div>' : '') +
+      (paid ? '<div class="stamp">PAID</div>' : '') + (inv.status === 'Void' ? '<div class="stamp" style="color:#b42318;border-color:#b42318">VOID</div>' : '') +
       '<header><div><h1>' + esc(s.business_name) + '</h1><div class="muted">' + esc(s.business_tagline) + '</div>' +
       '<div class="muted">' + esc(s.business_address) + '</div>' +
       (phones ? '<div class="muted">' + phones + '</div>' : '') +

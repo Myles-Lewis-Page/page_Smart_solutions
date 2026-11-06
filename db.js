@@ -5,7 +5,7 @@ const path = require('path');
 const { SERVICES } = require('./seed-data');
 
 const DEFAULT_SETTINGS = {
-  business_name: 'Page Smart Solutions LLC',
+  business_name: 'Page Smart Solutions',
   business_tagline: 'IT and smart home services',
   business_phone: '',
   business_phone_2: '',
@@ -160,6 +160,8 @@ const SCHEMA = [
   `ALTER TABLE invoices ADD COLUMN IF NOT EXISTS from_addr TEXT NOT NULL DEFAULT ''`,
   `ALTER TABLE invoices ADD COLUMN IF NOT EXISTS one_way_miles DOUBLE PRECISION`,
   `ALTER TABLE invoices ADD COLUMN IF NOT EXISTS one_way_minutes INTEGER`,
+  `ALTER TABLE invoices ADD COLUMN IF NOT EXISTS public_token TEXT`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS invoices_token_idx ON invoices(public_token)`,
   `ALTER TABLE services ADD COLUMN IF NOT EXISTS no_travel BOOLEAN NOT NULL DEFAULT FALSE`,
 ];
 
@@ -210,6 +212,9 @@ async function init() {
       );
     }
   }
+  // Give every invoice a private customer link token
+  const missing = await client.query('SELECT id FROM invoices WHERE public_token IS NULL');
+  for (const row of missing.rows) await client.query('UPDATE invoices SET public_token = $1 WHERE id = $2', [require('crypto').randomBytes(16).toString('hex'), row.id]);
   // One time: remote work carries no mileage or travel charge. After this, the admin controls it per service.
   const first = await client.query("INSERT INTO settings(key, value) VALUES ('migr_no_travel', '1') ON CONFLICT (key) DO NOTHING RETURNING key");
   if (first.rows.length) await client.query("UPDATE services SET no_travel = TRUE WHERE name ILIKE 'remote%'");

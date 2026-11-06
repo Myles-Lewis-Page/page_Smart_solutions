@@ -552,8 +552,15 @@ VIEWS.settings = async main => {
       <section class="panel"><h2>Travel</h2><div class="body" style="display:grid;gap:14px"><div class="grid4">
         ${f('travel_free_minutes', 'Free within (min, one way)', 'min="0"', 'number')}${f('travel_rate', 'Travel rate per hour', 'min="0" step="0.01"', 'number')}${f('travel_round_minutes', 'Round to nearest (min)', 'min="5"', 'number')}${f('onsite_minimum_hours', 'On-site minimum (hours)', 'min="0" step="0.5"', 'number')}
       </div><div class="grid4">${f('parts_markup', 'Parts markup % (added to equipment you buy for a job)', 'min="0" step="0.5"', 'number')}</div></div></section>
+      <section class="panel"><h2>New message alerts</h2><div class="body" style="display:grid;gap:12px">
+        <p class="hint">When someone uses the contact form on your site, you get an email. It is set up in Railway with RESEND_API_KEY and NOTIFY_EMAIL. You can list several addresses in NOTIFY_EMAIL, separated by commas.</p>
+        <div><button type="button" class="btn" id="notify-test">Send a test alert</button></div></div></section>
       <div class="actions" style="justify-content:flex-start"><button class="btn primary" type="submit">Save settings</button></div>
     </form>`;
+  $('#notify-test').addEventListener('click', guard(async () => {
+    const r = await api('/notify-test', { method: 'POST', body: {} });
+    if (r.ok) toast('Test alert sent. Check your email.'); else toast(r.error || 'Could not send.', 'err');
+  }));
   $('#settings-form').addEventListener('submit', guard(async e => {
     e.preventDefault();
     const body = {};
@@ -847,7 +854,7 @@ function openInvoice(inv, prefill = {}) {
     <div class="grid2"><label>Notes (shown on the invoice)<textarea name="notes" rows="3">${esc(o.notes)}</textarea></label>
       <div style="display:grid;gap:12px"><label>Discount ($)<input name="discount" type="number" step="0.01" min="0" value="${esc(o.discount)}"></label><label>Sales tax %<input name="tax_rate" type="number" step="0.01" min="0" value="${esc(o.tax_rate)}"></label></div></div>
     <div class="totals" id="i-totals"></div>
-    <div class="actions">${isNew ? '' : '<button type="button" class="btn danger spacer" id="i-del">Delete</button>'}<button type="button" class="btn" data-close>Close</button>${isNew ? '' : '<button type="button" class="btn" id="i-print">Print or save PDF</button>'}<button class="btn primary" type="submit">Save invoice</button></div></form>`);
+    <div class="actions">${isNew ? '' : '<button type="button" class="btn danger spacer" id="i-del">Delete</button>'}<button type="button" class="btn" data-close>Close</button>${isNew ? '' : '<button type="button" class="btn" id="i-print">Print or save PDF</button><button type="button" class="btn" id="i-link">Copy customer link</button><button type="button" class="btn" id="i-sms">Text link</button><button type="button" class="btn" id="i-mail">Email link</button>'}<button class="btn primary" type="submit">Save invoice</button></div></form>`);
   const form = $('#inv-form', dlg);
   const el = form.elements;
   const updateTotals = () => {
@@ -903,6 +910,15 @@ function openInvoice(inv, prefill = {}) {
         route();
       } catch (err) { if (w) w.close(); toast(err.message, 'err'); }
     });
+    const link = () => location.origin + '/i/' + o.public_token;
+    const cust = () => findBy(state.customers, o.customer_id);
+    const msg = () => `Hi${cust() ? ' ' + cust().name.split(' ')[0] : ''}, here is your ${o.status === 'Paid' ? 'receipt' : 'invoice'} ${o.number} from ${state.settings.business_name}: ${link()}`;
+    $('#i-link').addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText(link()); toast('Customer link copied'); }
+      catch (e) { window.prompt('Copy this link', link()); }
+    });
+    $('#i-sms').addEventListener('click', () => { const c = cust(); location.href = 'sms:' + ((c && c.phone) || '').replace(/[^\d+]/g, '') + '?&body=' + encodeURIComponent(msg()); });
+    $('#i-mail').addEventListener('click', () => { const c = cust(); location.href = 'mailto:' + ((c && c.email) || '') + '?subject=' + encodeURIComponent(`${state.settings.business_name} ${o.status === 'Paid' ? 'receipt' : 'invoice'} ${o.number}`) + '&body=' + encodeURIComponent(msg()); });
     confirmDelete($('#i-del'), async () => { await api('/invoices/' + o.id, { method: 'DELETE' }); await reload('invoices', 'orders'); closeDialog(dlg); toast('Invoice deleted'); route(); });
   }
 }

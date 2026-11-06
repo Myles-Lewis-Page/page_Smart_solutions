@@ -98,9 +98,9 @@ async function insertInvoice(f, today) {
     const number = await nextInvoiceNumber(today);
     try {
       const r = await q(
-        `INSERT INTO invoices(number, customer_id, order_id, issue_date, due_date, items, subtotal, discount, tax_rate, tax, total, status, paid_date, payment_method, notes, from_addr, one_way_miles, one_way_minutes)
-         VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING id`,
-        [number, f.customer_id, f.order_id, f.issue_date, f.due_date, JSON.stringify(f.items), f.subtotal, f.discount, f.tax_rate, f.tax, f.total, f.status, f.paid_date, f.payment_method, f.notes, f.from_addr, f.one_way_miles, f.one_way_minutes]
+        `INSERT INTO invoices(number, customer_id, order_id, issue_date, due_date, items, subtotal, discount, tax_rate, tax, total, status, paid_date, payment_method, notes, from_addr, one_way_miles, one_way_minutes, public_token)
+         VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) RETURNING id`,
+        [number, f.customer_id, f.order_id, f.issue_date, f.due_date, JSON.stringify(f.items), f.subtotal, f.discount, f.tax_rate, f.tax, f.total, f.status, f.paid_date, f.payment_method, f.notes, f.from_addr, f.one_way_miles, f.one_way_minutes, crypto.randomBytes(16).toString('hex')]
       );
       return r.rows[0].id;
     } catch (e) {
@@ -225,25 +225,39 @@ function limiter(max, windowMs) {
   };
 }
 
-// ---------- optional email notification (Resend) ----------
-async function notifyInquiry(inq) {
+// ---------- optional email alerts (Resend) ----------
+// NOTIFY_EMAIL may hold several addresses separated by commas. A carrier text address can be one of them.
+async function sendAlert(subject, text, replyTo) {
   const key = process.env.RESEND_API_KEY;
-  const to = process.env.NOTIFY_EMAIL;
-  if (!key || !to) return;
+  const to = String(process.env.NOTIFY_EMAIL || '').split(',').map(x => x.trim()).filter(Boolean);
+  if (!key || !to.length) return { ok: false, error: 'Alerts are not set up yet. Add RESEND_API_KEY and NOTIFY_EMAIL in Railway.' };
   try {
-    await fetch('https://api.resend.com/emails', {
+    const r = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         from: process.env.NOTIFY_FROM || 'Page Smart Solutions <onboarding@resend.dev>',
-        to: [to],
-        subject: `New inquiry from ${inq.name}`,
-        text: `Name: ${inq.name}\nPhone: ${inq.phone}\nEmail: ${inq.email}\nNeeds: ${inq.service}\nPrefers: ${inq.preferred}\n\n${inq.message}`,
+        to, subject, text,
+        ...(replyTo ? { reply_to: replyTo } : {}),
       }),
+      signal: AbortSignal.timeout(10000),
     });
+    if (!r.ok) {
+      const body = await r.text().catch(() => '');
+      console.error('Alert email failed:', r.status, body.slice(0, 300));
+      let msg = body;
+      try { msg = JSON.parse(body).message || body; } catch (e) { /* keep raw */ }
+      return { ok: false, error: `Resend refused it (${r.status}): ${String(msg).slice(0, 200)}` };
+    }
+    return { ok: true };
   } catch (e) {
-    console.error('Inquiry email failed:', e.message);
+    console.error('Alert email failed:', e.message);
+    return { ok: false, error: 'Could not reach Resend: ' + e.message };
   }
+}
+function notifyInquiry(inq, baseUrl) {
+  const text = `New message from your website\n\nName: ${inq.name}\nPhone: ${inq.phone || 'not given'}\nEmail: ${inq.email || 'not given'}\nNeeds: ${inq.service || 'not specified'}\nPrefers: ${inq.preferred || 'any'}\n\n${inq.message}\n\nOpen your inbox: ${baseUrl}/admin#/inbox`;
+  return sendAlert(`New inquiry from ${inq.name}`, text, inq.email || undefined);
 }
 
 // ---------- app ----------
@@ -317,7 +331,7 @@ function createApp() {
     const inq = { name, email, phone, message, service: str(b.service, 100), preferred: str(b.preferred, 20) };
     await q('INSERT INTO inquiries(name, email, phone, service, preferred, message) VALUES ($1,$2,$3,$4,$5,$6)',
       [inq.name, inq.email, inq.phone, inq.service, inq.preferred, inq.message]);
-    notifyInquiry(inq);
+    notifyInquiry(inq, `${req.protocol}://${req.get('host')}`);
     res.json({ ok: true });
   }));
 
@@ -333,9 +347,35 @@ function createApp() {
     res.json({ ok: true });
   });
 
+  // Customer-facing invoice by private link (no login). The token is 128 random bits.
+  app.get('/i/:token', (req, res) => { res.set({ 'X-Robots-Tag': 'noindex', 'Cache-Control': 'no-store' }); sendWeb('print.html', res); });
+  app.get('/api/public/invoice/:token', limiter(60, 60 * 1000), ah(async (req, res) => {
+    const token = String(req.params.token || '');
+    if (!/^[a-f0-9]{32}$/.test(token)) throw httpError(404, 'Invoice not found');
+    const inv = (await q('SELECT * FROM invoices WHERE public_token=$1', [token])).rows[0];
+    if (!inv) throw httpError(404, 'Invoice not found');
+    const c = inv.customer_id ? (await q('SELECT name, address, phone, email FROM customers WHERE id=$1', [inv.customer_id])).rows[0] : null;
+    const s = await getSettings();
+    res.set('Cache-Control', 'no-store');
+    res.json({
+      invoice: {
+        number: inv.number, issue_date: inv.issue_date, due_date: inv.due_date, status: inv.status, paid_date: inv.paid_date, payment_method: inv.payment_method,
+        items: inv.items, subtotal: inv.subtotal, discount: inv.discount, tax_rate: inv.tax_rate, tax: inv.tax, total: inv.total, notes: inv.notes, customer: c,
+      },
+      settings: {
+        business_name: s.business_name, business_tagline: s.business_tagline, business_address: s.business_address,
+        business_phone: s.business_phone, business_phone_2: s.business_phone_2, business_email: s.business_email, payment_instructions: s.payment_instructions,
+      },
+    });
+  }));
+
   // Everything below needs the admin login
   app.use('/api', requireAuth);
   app.get('/api/me', (req, res) => res.json({ ok: true }));
+  app.post('/api/notify-test', limiter(5, 60 * 1000), ah(async (req, res) => {
+    const r = await sendAlert('Test alert from Page Smart Solutions', 'If you can read this, new contact form messages will reach you here.');
+    res.json(r);
+  }));
 
   // Settings
   app.get('/api/settings', ah(async (req, res) => res.json(await getSettings())));
