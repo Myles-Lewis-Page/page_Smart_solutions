@@ -87,6 +87,9 @@ function invoiceFields(b, s, today) {
     due_date: dateOr(b.due_date),
     customer_id: intOrNull(b.customer_id),
     order_id: intOrNull(b.order_id),
+    from_addr: str(b.from_addr, 300),
+    one_way_miles: b.one_way_miles === '' || b.one_way_miles == null ? null : (Math.max(0, Math.round(Number(b.one_way_miles) * 10) / 10) || null),
+    one_way_minutes: intOrNull(b.one_way_minutes),
   };
 }
 
@@ -95,9 +98,9 @@ async function insertInvoice(f, today) {
     const number = await nextInvoiceNumber(today);
     try {
       const r = await q(
-        `INSERT INTO invoices(number, customer_id, order_id, issue_date, due_date, items, subtotal, discount, tax_rate, tax, total, status, paid_date, payment_method, notes)
-         VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id`,
-        [number, f.customer_id, f.order_id, f.issue_date, f.due_date, JSON.stringify(f.items), f.subtotal, f.discount, f.tax_rate, f.tax, f.total, f.status, f.paid_date, f.payment_method, f.notes]
+        `INSERT INTO invoices(number, customer_id, order_id, issue_date, due_date, items, subtotal, discount, tax_rate, tax, total, status, paid_date, payment_method, notes, from_addr, one_way_miles, one_way_minutes)
+         VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING id`,
+        [number, f.customer_id, f.order_id, f.issue_date, f.due_date, JSON.stringify(f.items), f.subtotal, f.discount, f.tax_rate, f.tax, f.total, f.status, f.paid_date, f.payment_method, f.notes, f.from_addr, f.one_way_miles, f.one_way_minutes]
       );
       return r.rows[0].id;
     } catch (e) {
@@ -422,6 +425,7 @@ function createApp() {
       paid_date: req.body && req.body.paid_date, payment_method: req.body && req.body.payment_method,
       issue_date: o.service_date || today, due_date: addDays(today, Number(s.invoice_terms_days) || 7),
       tax_rate: s.sales_tax_rate, notes: '',
+      from_addr: o.from_addr, one_way_miles: o.one_way_miles, one_way_minutes: o.one_way_minutes,
     }, s, today);
     const newId = await insertInvoice(f, today);
     await q("UPDATE orders SET status = 'Invoiced' WHERE id = $1", [id]);
@@ -448,8 +452,8 @@ function createApp() {
     const s = await getSettings();
     const f = invoiceFields(req.body, s, todayStr(s));
     const r = await q(
-      `UPDATE invoices SET customer_id=$1, order_id=$2, issue_date=$3, due_date=$4, items=$5::jsonb, subtotal=$6, discount=$7, tax_rate=$8, tax=$9, total=$10, status=$11, paid_date=$12, payment_method=$13, notes=$14 WHERE id=$15 RETURNING id`,
-      [f.customer_id, f.order_id, f.issue_date, f.due_date, JSON.stringify(f.items), f.subtotal, f.discount, f.tax_rate, f.tax, f.total, f.status, f.paid_date, f.payment_method, f.notes, Number(req.params.id)]
+      `UPDATE invoices SET customer_id=$1, order_id=$2, issue_date=$3, due_date=$4, items=$5::jsonb, subtotal=$6, discount=$7, tax_rate=$8, tax=$9, total=$10, status=$11, paid_date=$12, payment_method=$13, notes=$14, from_addr=$15, one_way_miles=$16, one_way_minutes=$17 WHERE id=$18 RETURNING id`,
+      [f.customer_id, f.order_id, f.issue_date, f.due_date, JSON.stringify(f.items), f.subtotal, f.discount, f.tax_rate, f.tax, f.total, f.status, f.paid_date, f.payment_method, f.notes, f.from_addr, f.one_way_miles, f.one_way_minutes, Number(req.params.id)]
     );
     if (!r.rows[0]) throw httpError(404, 'Invoice not found');
     res.json((await q(INVOICE_SELECT + ' WHERE i.id=$1', [r.rows[0].id])).rows[0]);

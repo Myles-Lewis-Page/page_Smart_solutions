@@ -92,7 +92,11 @@ const dlg = $('#dlg');
 const dlg2 = $('#dlg2');
 function openDialog(el, html) { el.innerHTML = html; if (!el.open) el.showModal(); }
 function closeDialog(el) { if (el.open) el.close(); }
-[dlg, dlg2].forEach(d => d.addEventListener('click', e => { if (e.target === d) d.close(); }));
+[dlg, dlg2].forEach(d => d.addEventListener('click', e => {
+  if (e.target !== d) return;
+  const r = d.getBoundingClientRect(); // only a click outside the box counts as a backdrop click
+  if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) d.close();
+}));
 
 function confirmDelete(btn, fn) {
   btn.addEventListener('click', guard(async () => {
@@ -841,7 +845,7 @@ function openInvoice(inv, prefill = {}) {
       <label class="i-paid">Date paid<input name="paid_date" type="date" value="${esc(o.paid_date || todayStr())}"></label>
       <label class="i-paid">Payment method<select name="payment_method"><option value="">Choose</option>${opts(PAY_METHODS, o.payment_method)}</select></label></div>
     <div class="section-title">Line items</div><div id="i-items"></div>
-    <div class="travel-row"><label>One-way drive (min)<input id="i-minutes" type="number" min="0" step="1"></label><button type="button" class="btn" id="i-addtravel">Add travel charge</button><span class="hint" id="i-travelhint"></span></div>
+    <div class="travel-row"><label>One-way drive (min)<input id="i-minutes" type="number" min="0" step="1" value="${esc(o.one_way_minutes ?? '')}"></label><button type="button" class="btn" id="i-addtravel">Add travel charge</button><span class="hint" id="i-travelhint"></span></div>
     ${mileagePanelHtml('i')}
     <div class="grid2"><label>Notes (shown on the invoice)<textarea name="notes" rows="3">${esc(o.notes)}</textarea></label>
       <div style="display:grid;gap:12px"><label>Discount ($)<input name="discount" type="number" step="0.01" min="0" value="${esc(o.discount)}"></label><label>Sales tax %<input name="tax_rate" type="number" step="0.01" min="0" value="${esc(o.tax_rate)}"></label></div></div>
@@ -856,7 +860,7 @@ function openInvoice(inv, prefill = {}) {
   let mil = null;
   const ed = createItemEditor($('#i-items', dlg), o.items, () => { updateTotals(); if (mil) mil.onItems(); });
   reload('mileage', 'services', 'customers').then(() => {
-    mil = wireMileage({ p: 'i', items: o.items, ed, onTotal: updateTotals, customerEl: $('#i-customer'), dateEl: el.issue_date, minutesEl: $('#i-minutes'), from: '', miles: '' });
+    mil = wireMileage({ p: 'i', items: o.items, ed, onTotal: updateTotals, customerEl: $('#i-customer'), dateEl: el.issue_date, minutesEl: $('#i-minutes'), from: o.from_addr, miles: o.one_way_miles });
   }).catch(() => {});
   const togglePaid = () => $$('.i-paid', form).forEach(l => { l.hidden = el.status.value !== 'Paid'; });
   el.status.addEventListener('change', togglePaid);
@@ -876,6 +880,7 @@ function openInvoice(inv, prefill = {}) {
     customer_id: el.customer_id.value || null, issue_date: el.issue_date.value, due_date: el.due_date.value, status: el.status.value,
     paid_date: el.paid_date.value, payment_method: el.payment_method.value, notes: el.notes.value, discount: el.discount.value, tax_rate: el.tax_rate.value,
     items: o.items, order_id: o.order_id,
+    from_addr: $('#i-from').value, one_way_miles: $('#i-miles').value || null, one_way_minutes: $('#i-minutes').value || null,
   });
   const save = async () => {
     const saved = isNew ? await api('/invoices', { method: 'POST', body: collect() }) : await api('/invoices/' + o.id, { method: 'PUT', body: collect() });
