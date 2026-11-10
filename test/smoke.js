@@ -31,6 +31,8 @@ const ok = (name, cond) => { assert.ok(cond, name); console.log('  ok  ' + name)
     let r = await call('GET', '/healthz'); ok('healthz', r.status === 200);
     r = await call('GET', '/'); ok('homepage renders services', r.status === 200 && r.data.includes('Services and rates') && r.data.includes('Network troubleshooting'));
     ok('homepage has contact form', r.data.includes('id="contact-form"'));
+    ok('homepage has admin sign-in popup', r.data.includes('id="admin-dialog"') && r.data.includes('data-admin'));
+    r = await call('GET', '/api/session'); ok('session check says signed out', r.status === 200 && r.data.signedIn === false);
     r = await call('GET', '/api/customers'); ok('api requires login', r.status === 401);
     r = await call('POST', '/api/login', { password: 'nope' }); ok('bad password rejected', r.status === 401);
     r = await call('POST', '/api/login', { password: 'test-pass' });

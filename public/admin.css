@@ -185,3 +185,4 @@ details.panel summary { cursor: pointer; padding: 14px 16px; font: 600 1.05rem v
   .cal-bar select { margin-left: 0; flex: 1 1 100%; }
 }
 .dim td { opacity: 0.55; }
+.login .back-link { justify-self: center; font-size: 14px; color: var(--muted); }

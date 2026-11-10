@@ -103,3 +103,14 @@
   .r-name { flex: 1 1 100%; }
   .r-price { text-align: left; }
 }
+
+/* Admin sign-in popup */
+.admin-dlg { border: 1px solid var(--line); border-radius: 12px; padding: 0; background: var(--surface); color: var(--ink); width: min(380px, calc(100vw - 32px)); box-shadow: 0 24px 70px rgba(0, 0, 0, 0.35); }
+.admin-dlg::backdrop { background: rgba(8, 16, 15, 0.55); }
+.admin-dlg form { display: grid; gap: 14px; padding: 22px; }
+.admin-dlg-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.admin-dlg-head h2 { font-size: 1.25rem; margin: 0; }
+.admin-dlg-x { appearance: none; width: 36px; height: 36px; border: 1px solid var(--line); background: var(--surface); color: var(--muted); border-radius: 8px; font-size: 20px; line-height: 1; cursor: pointer; }
+.admin-dlg-x:hover { color: var(--ink); border-color: var(--muted); }
+.admin-dlg-err { min-height: 1.2em; margin: 0; color: var(--danger); font-size: 14px; }
+.admin-dlg-actions { display: flex; gap: 10px; justify-content: flex-end; }

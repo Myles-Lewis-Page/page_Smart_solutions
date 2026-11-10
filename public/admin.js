@@ -1359,7 +1359,8 @@ function showLogin(message = '') {
     <label>Username<input name="username" required autocomplete="username" autocapitalize="none" spellcheck="false" value="${esc(lastUser())}"></label>
     <label>Password<input type="password" name="password" required autocomplete="current-password"></label>
     <p class="err" id="login-err" role="alert">${esc(message)}</p>
-    <button class="btn primary" type="submit">Sign in</button></form></div>`;
+    <button class="btn primary" type="submit">Sign in</button>
+    <a class="back-link" href="/">&larr; Back to website</a></form></div>`;
   const lf = $('#login-form').elements;
   (lf.username.value ? lf.password : lf.username).focus();
   $('#login-form').addEventListener('submit', async e => {

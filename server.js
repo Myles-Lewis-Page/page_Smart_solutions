@@ -461,6 +461,12 @@ function createApp() {
     });
   }));
 
+  // Lets the public site know whether this browser is already signed in (always answers 200)
+  app.get('/api/session', ah(async (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    res.json({ signedIn: !!(await userFromToken(cookies(req)[COOKIE])) });
+  }));
+
   // Everything below needs the admin login
   app.use('/api', requireAuth, roleGate);
   app.get('/api/me', (req, res) => res.json({ ok: true, user: publicUser(req.user), caps: capsFor(req.user.role) }));

@@ -97,7 +97,7 @@ function renderHome(s, services) {
     <nav aria-label="Main">
       <a href="#services">Services</a>
       <a href="#travel">Travel</a>
-      <a class="btn small" href="/admin" rel="nofollow">Admin login</a>
+      <a class="btn small" href="/admin" rel="nofollow" data-admin>Admin login</a>
       <a class="btn small primary" href="#contact">Contact me</a>
     </nav>
   </div>
@@ -181,9 +181,18 @@ function renderHome(s, services) {
 <footer class="foot">
   <div class="wrap foot-bar">
     <span>&copy; ${new Date().getFullYear()} ${name}</span>
-    <span>${area} &middot; <a href="/admin" rel="nofollow">Admin login</a></span>
+    <span>${area} &middot; <a href="/admin" rel="nofollow" data-admin>Admin login</a></span>
   </div>
 </footer>
+<dialog id="admin-dialog" class="admin-dlg" aria-labelledby="admin-dlg-title">
+  <form id="admin-login" method="dialog">
+    <div class="admin-dlg-head"><h2 id="admin-dlg-title">Admin sign in</h2><button type="button" class="admin-dlg-x" data-admin-close aria-label="Close">&times;</button></div>
+    <label>Username<input name="username" required autocomplete="username" autocapitalize="none" spellcheck="false"></label>
+    <label>Password<input name="password" type="password" required autocomplete="current-password"></label>
+    <p class="admin-dlg-err" id="admin-err" role="alert"></p>
+    <div class="admin-dlg-actions"><button type="button" class="btn" data-admin-close>Cancel</button><button type="submit" class="btn primary">Sign in</button></div>
+  </form>
+</dialog>
 <script src="/contact.js" defer></script>
 </body>
 </html>`;
