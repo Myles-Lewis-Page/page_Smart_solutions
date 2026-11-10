@@ -135,7 +135,11 @@ function createItemEditor(root, items, onChange) {
       <input data-f="rate" type="number" step="0.01" min="0" value="${esc(it.rate)}" aria-label="Rate">
       <input data-f="qty" type="number" step="any" min="0" value="${esc(it.qty)}" aria-label="Quantity or hours">
       <output>${money(r2(num(it.rate) * num(it.qty)))}</output>
-      <button type="button" class="icon-btn" data-rm="${i}" aria-label="Remove line">&times;</button>
+      <span class="item-actions">
+        <button type="button" class="icon-btn" data-mv="-1" data-i="${i}" aria-label="Move line up"${i === 0 ? ' disabled' : ''}>&uarr;</button>
+        <button type="button" class="icon-btn" data-mv="1" data-i="${i}" aria-label="Move line down"${i === items.length - 1 ? ' disabled' : ''}>&darr;</button>
+        <button type="button" class="icon-btn" data-rm="${i}" aria-label="Remove line">&times;</button>
+      </span>
     </div>`;
   function render() {
     const groups = {};
@@ -171,6 +175,18 @@ function createItemEditor(root, items, onChange) {
     if (inputs.length) inputs[inputs.length - 1].focus();
   });
   root.addEventListener('click', e => {
+    const mv = e.target.closest('[data-mv]');
+    if (mv) {
+      const i = Number(mv.dataset.i), j = i + Number(mv.dataset.mv);
+      if (j < 0 || j >= items.length) return;
+      const [it] = items.splice(i, 1);
+      items.splice(j, 0, it);
+      render();
+      if (onChange) onChange();
+      const again = $(`[data-mv="${mv.dataset.mv}"][data-i="${j}"]`, root);
+      if (again && !again.disabled) again.focus();
+      return;
+    }
     const rm = e.target.closest('[data-rm]');
     if (!rm) return;
     items.splice(Number(rm.dataset.rm), 1);
