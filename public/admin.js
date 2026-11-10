@@ -8,18 +8,29 @@ const INVOICE_STATUS = ['Draft', 'Sent', 'Paid', 'Void'];
 const PAY_METHODS = ['Venmo', 'Zelle', 'Cash', 'Check', 'Card', 'Other'];
 const BILLING = ['Hourly', 'Flat', 'Device', 'Custom'];
 const EXPENSE_CATEGORIES = ['Equipment & parts', 'Software & subscriptions', 'Tools', 'Supplies', 'Advertising & website', 'Insurance & licenses', 'Education & training', 'Phone & internet', 'Vehicle (not mileage)', 'Professional fees', 'Other'];
+// [view, label, permission needed]. The permissions come from the server (see CAPS in server.js).
 const NAV = [
-  ['dashboard', 'Dashboard'], ['inbox', 'Inbox'], ['jobs', 'Jobs'], ['invoices', 'Invoices'], ['customers', 'Customers'],
-  ['expenses', 'Expenses'], ['mileage', 'Mileage'], ['financial', 'Financial'], ['services', 'Services'], ['settings', 'Settings'],
+  ['dashboard', 'Dashboard'], ['calendar', 'Calendar'], ['inbox', 'Inbox', 'inquiries'], ['jobs', 'Jobs'], ['invoices', 'Invoices', 'invoices'], ['customers', 'Customers'],
+  ['expenses', 'Expenses', 'expenses'], ['mileage', 'Mileage', 'mileage'], ['financial', 'Financial', 'financial'], ['services', 'Services', 'services_edit'],
+  ['team', 'Team', 'users'], ['settings', 'Settings', 'settings_edit'],
 ];
+const ROLE_INFO = {
+  admin: ['Admin', 'Everything: settings, taxes, expenses, mileage, prices, invoices, jobs and the team.'],
+  accounting: ['Accounting', 'Price changes, invoices (including saved ones), jobs, customers and the calendar. No settings, taxes or expenses.'],
+  employee: ['Employee', 'Add jobs, update client info and see the calendar. Only sees jobs assigned to them. No prices, invoices or money.'],
+};
+const ROLES_LIST = ['admin', 'accounting', 'employee'];
+const CREW_COLORS = ['#2f7dd1', '#c2571a', '#7a4fd1', '#1f8a5b', '#b0316b', '#8a7a12', '#0f8f9e', '#a64040'];
+const crewColor = id => CREW_COLORS[Math.abs(Number(id) || 0) % CREW_COLORS.length];
 const CHIP = {
   Requested: 'info', Scheduled: 'info', 'In progress': 'warn', Completed: 'ok', Invoiced: 'accent', Cancelled: '',
   Draft: '', Sent: 'info', Paid: 'ok', Void: '', Overdue: 'danger', New: 'warn', Read: 'info', Done: 'ok',
 };
 
 /* ---------- state and helpers ---------- */
-const state = { settings: {}, services: [], customers: [], orders: [], invoices: [], inquiries: [], expenses: [], mileage: { rates: [], trips: [] } };
-const ui = { year: new Date().getFullYear(), view: 'dashboard' };
+const state = { settings: {}, services: [], customers: [], orders: [], invoices: [], inquiries: [], expenses: [], mileage: { rates: [], trips: [] }, team: [], users: [], me: null, caps: {} };
+const ui = { year: new Date().getFullYear(), view: 'dashboard', cal: null };
+const can = key => !!state.caps[key];
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -80,12 +91,21 @@ const FETCH = {
   services: async () => { state.services = await api('/services'); },
   customers: async () => { state.customers = await api('/customers'); },
   orders: async () => { state.orders = await api('/orders'); },
+  team: async () => { state.team = await api('/team'); },
+  users: async () => { state.users = await api('/users'); },
   invoices: async () => { state.invoices = await api('/invoices'); },
   inquiries: async () => { state.inquiries = await api('/inquiries'); },
   expenses: async () => { state.expenses = await api('/expenses'); },
   mileage: async () => { state.mileage = await api('/mileage'); },
 };
-const reload = (...keys) => Promise.all((keys.length ? keys : Object.keys(FETCH)).map(k => FETCH[k]()));
+// Data a role is not allowed to read is skipped, so every account only loads what it can see.
+const NEEDS = { invoices: 'invoices', inquiries: 'inquiries', expenses: 'expenses', mileage: 'mileage', users: 'users' };
+const reload = (...keys) => Promise.all((keys.length ? keys : Object.keys(FETCH)).filter(k => !NEEDS[k] || can(NEEDS[k])).map(k => FETCH[k]()));
+const crewName = id => (state.team.find(u => u.id === Number(id)) || {}).name || 'Former team member';
+const initials = name => String(name || '?').trim().split(/\s+/).slice(0, 2).map(w => w[0]).join('').toUpperCase();
+const crewDots = ids => (ids || []).map(id => `<span class="crew" style="--c:${crewColor(id)}" title="${esc(crewName(id))}">${esc(initials(crewName(id)))}</span>`).join('');
+const fmtTime = t => { const m = /^(\d{2}):(\d{2})$/.exec(t || ''); if (!m) return ''; const h = Number(m[1]); return `${h % 12 || 12}:${m[2]} ${h < 12 ? 'AM' : 'PM'}`; };
+const DURATIONS = [[30, '30 min'], [60, '1 hour'], [90, '1.5 hours'], [120, '2 hours'], [180, '3 hours'], [240, '4 hours'], [360, '6 hours'], [480, 'All day (8 hours)']];
 
 /* ---------- dialogs ---------- */
 const dlg = $('#dlg');
@@ -299,24 +319,24 @@ const VIEWS = {};
 
 /* ---- Dashboard ---- */
 VIEWS.dashboard = async main => {
-  const [d] = await Promise.all([api('/dashboard'), reload('inquiries', 'orders', 'invoices')]);
-  const jobLi = o => `<li data-act="open-job" data-id="${o.id}"><div class="main"><b>${esc(o.title || 'Untitled job')}</b><span>${esc(o.customer_name || 'No customer')} &middot; ${fmtDate(o.service_date)}</span></div>${chip(o.status)}</li>`;
+  const [d] = await Promise.all([api('/dashboard'), reload('inquiries', 'orders', 'invoices', 'team')]);
+  const jobLi = o => `<li data-act="open-job" data-id="${o.id}"><div class="main"><b>${esc(o.title || 'Untitled job')}</b><span>${esc(o.customer_name || 'No customer')} &middot; ${fmtDate(o.service_date)}${o.start_time ? ' ' + fmtTime(o.start_time) : ''}</span></div>${can('assign') ? crewDots(o.assignee_ids) : ''}${chip(o.status)}</li>`;
   const invLi = i => `<li data-act="open-invoice" data-id="${i.id}"><div class="main"><b>${esc(i.customer_name || 'No customer')}</b><span>${esc(i.number)} &middot; due ${fmtDate(i.due_date) || 'on receipt'}</span></div><span class="num">${money(i.total)}</span></li>`;
   const inqLi = q => `<li data-act="open-inquiry" data-id="${q.id}"><div class="main"><b>${esc(q.name)}</b><span>${esc(q.service || 'General question')} &middot; ${fmtStamp(q.created_at)}</span></div>${chip('New')}</li>`;
   main.innerHTML = `
     <div class="page-head"><div><h1>Dashboard</h1><p class="sub">${esc(state.settings.business_name)} &middot; ${d.year} year to date</p></div>
-      <div class="head-actions"><button class="btn primary" data-act="new-job">New job</button><button class="btn" data-act="new-expense">Add expense</button></div></div>
+      <div class="head-actions"><button class="btn primary" data-act="new-job">New job</button>${can('expenses') ? '<button class="btn" data-act="new-expense">Add expense</button>' : ''}</div></div>
     <div class="tiles">
-      <div class="tile${d.overdueCount ? ' bad' : ''}"><div class="k">Waiting on payment</div><div class="v">${money(d.outstanding)}</div><div class="s">${d.outstandingCount} sent${d.overdueCount ? `, ${d.overdueCount} overdue` : ''}</div></div>
-      <div class="tile"><div class="k">Paid this year</div><div class="v">${money(d.paidYtd)}</div><div class="s">Cash received, before sales tax</div></div>
-      <div class="tile"><div class="k">Net profit</div><div class="v">${money(d.profitYtd)}</div><div class="s">After expenses and mileage</div></div>
-      <div class="tile warn"><div class="k">Set aside for tax</div><div class="v">${money(d.setAside)}</div><div class="s">Estimated, side business only</div></div>
-      <div class="tile"><div class="k">Open jobs</div><div class="v">${d.openOrders}</div><div class="s">${money(d.draftTotal)} in drafts</div></div>
+      ${can('invoices') ? `<div class="tile${d.overdueCount ? ' bad' : ''}"><div class="k">Waiting on payment</div><div class="v">${money(d.outstanding)}</div><div class="s">${d.outstandingCount} sent${d.overdueCount ? `, ${d.overdueCount} overdue` : ''}</div></div>
+      <div class="tile"><div class="k">Paid this year</div><div class="v">${money(d.paidYtd)}</div><div class="s">Cash received, before sales tax</div></div>` : ''}
+      ${can('financial') ? `<div class="tile"><div class="k">Net profit</div><div class="v">${money(d.profitYtd)}</div><div class="s">After expenses and mileage</div></div>
+      <div class="tile warn"><div class="k">Set aside for tax</div><div class="v">${money(d.setAside)}</div><div class="s">Estimated, side business only</div></div>` : ''}
+      <div class="tile"><div class="k">${can('invoices') ? 'Open jobs' : 'My open jobs'}</div><div class="v">${d.openOrders}</div><div class="s">${can('invoices') ? money(d.draftTotal) + ' in drafts' : 'Assigned to you'}</div></div>
     </div>
     <div class="cols">
-      <section class="panel"><h2>New messages</h2>${d.inquiries.length ? `<ul class="list">${d.inquiries.map(inqLi).join('')}</ul>` : '<p class="empty">No new messages from the contact form.</p>'}</section>
-      <section class="panel"><h2>Open jobs</h2>${d.orders.length ? `<ul class="list">${d.orders.map(jobLi).join('')}</ul>` : '<p class="empty">No open jobs.</p>'}</section>
-      <section class="panel"><h2>Waiting on payment</h2>${d.unpaid.length ? `<ul class="list">${d.unpaid.map(invLi).join('')}</ul>` : '<p class="empty">Nothing waiting on payment.</p>'}</section>
+      ${can('inquiries') ? `<section class="panel"><h2>New messages</h2>${d.inquiries.length ? `<ul class="list">${d.inquiries.map(inqLi).join('')}</ul>` : '<p class="empty">No new messages from the contact form.</p>'}</section>` : ''}
+      <section class="panel"><h2>${can('invoices') ? 'Open jobs' : 'My jobs'}</h2>${d.orders.length ? `<ul class="list">${d.orders.map(jobLi).join('')}</ul>` : '<p class="empty">No open jobs.</p>'}</section>
+      ${can('invoices') ? `<section class="panel"><h2>Waiting on payment</h2>${d.unpaid.length ? `<ul class="list">${d.unpaid.map(invLi).join('')}</ul>` : '<p class="empty">Nothing waiting on payment.</p>'}</section>` : ''}
     </div>`;
   updateBadge();
 };
@@ -334,7 +354,7 @@ VIEWS.inbox = async main => {
 
 /* ---- Jobs ---- */
 VIEWS.jobs = async main => {
-  await reload('orders', 'customers', 'services', 'invoices');
+  await reload('orders', 'customers', 'services', 'invoices', 'team');
   const tag = o => ['all', o.status.toLowerCase().replace(/ /g, '-'), OPEN_STATUS.includes(o.status) ? 'open' : ''].join(' ');
   main.innerHTML = `
     <div class="page-head"><div><h1>Jobs</h1><p class="sub">Every visit and project, from first request to paid.</p></div>
@@ -343,8 +363,8 @@ VIEWS.jobs = async main => {
       <input type="search" class="grow" placeholder="Search customer or job" data-filter="jobs-table" aria-label="Search jobs">
       <select data-filter="jobs-table" aria-label="Filter by status"><option value="open">Open jobs</option><option value="all">All jobs</option>${ORDER_STATUS.map(s => `<option value="${s.toLowerCase().replace(/ /g, '-')}">${s}</option>`).join('')}</select>
     </div>
-    <div class="table-wrap"><table id="jobs-table"><thead><tr><th>Date</th><th>Customer</th><th>Job</th><th>Status</th><th class="num">Total</th><th>Invoice</th></tr></thead><tbody>
-      ${state.orders.map(o => `<tr data-row data-act="open-job" data-id="${o.id}" data-tags="${tag(o)}" data-text="${esc((o.customer_name + ' ' + o.title).toLowerCase())}"><td class="muted">${fmtDate(o.service_date)}</td><td><b>${esc(o.customer_name || 'No customer')}</b></td><td>${esc(o.title)}</td><td>${chip(o.status)}</td><td class="num">${money(o.total)}</td><td>${o.invoice_status ? chip(o.invoice_status) : ''}</td></tr>`).join('')}
+    <div class="table-wrap"><table id="jobs-table"><thead><tr><th>Date</th><th>Customer</th><th>Job</th>${can('assign') ? '<th>Crew</th>' : ''}<th>Status</th><th class="num">Total</th>${can('invoices') ? '<th>Invoice</th>' : ''}</tr></thead><tbody>
+      ${state.orders.map(o => `<tr data-row data-act="open-job" data-id="${o.id}" data-tags="${tag(o)}" data-text="${esc((o.customer_name + ' ' + o.title + ' ' + (o.assignee_ids || []).map(crewName).join(' ')).toLowerCase())}"><td class="muted">${fmtDate(o.service_date)}${o.start_time ? '<br>' + fmtTime(o.start_time) : ''}</td><td><b>${esc(o.customer_name || 'No customer')}</b></td><td>${esc(o.title)}</td>${can('assign') ? `<td>${crewDots(o.assignee_ids)}</td>` : ''}<td>${chip(o.status)}</td><td class="num">${money(o.total)}</td>${can('invoices') ? `<td>${o.invoice_status ? chip(o.invoice_status) : ''}</td>` : ''}</tr>`).join('')}
     </tbody></table><p class="empty" id="jobs-table-empty" hidden>No jobs match.</p></div>`;
   wireFilters(main);
 };
@@ -377,8 +397,8 @@ VIEWS.customers = async main => {
     <div class="page-head"><div><h1>Customers</h1><p class="sub">Contact details and service addresses.</p></div>
       <div class="head-actions"><button class="btn" data-act="csv-customers">Export CSV</button><button class="btn primary" data-act="new-customer">New customer</button></div></div>
     <div class="toolbar"><input type="search" class="grow" placeholder="Search name, phone, or address" data-filter="cust-table" aria-label="Search customers"></div>
-    <div class="table-wrap"><table id="cust-table"><thead><tr><th>Name</th><th>Phone</th><th>Email</th><th>Address</th><th class="num">Jobs</th><th class="num">Paid</th></tr></thead><tbody>
-      ${state.customers.map(c => { const s = stats(c.id); return `<tr data-row data-act="open-customer" data-id="${c.id}" data-tags="" data-text="${esc((c.name + ' ' + c.phone + ' ' + c.address + ' ' + c.email).toLowerCase())}"><td><b>${esc(c.name)}</b></td><td>${esc(c.phone)}</td><td>${esc(c.email)}</td><td class="clip">${esc(c.address)}</td><td class="num">${s.jobs}</td><td class="num">${money(s.paid)}</td></tr>`; }).join('')}
+    <div class="table-wrap"><table id="cust-table"><thead><tr><th>Name</th><th>Phone</th><th>Email</th><th>Address</th><th class="num">Jobs</th>${can('invoices') ? '<th class="num">Paid</th>' : ''}</tr></thead><tbody>
+      ${state.customers.map(c => { const s = stats(c.id); return `<tr data-row data-act="open-customer" data-id="${c.id}" data-tags="" data-text="${esc((c.name + ' ' + c.phone + ' ' + c.address + ' ' + c.email).toLowerCase())}"><td><b>${esc(c.name)}</b></td><td>${esc(c.phone)}</td><td>${esc(c.email)}</td><td class="clip">${esc(c.address)}</td><td class="num">${s.jobs}</td>${can('invoices') ? `<td class="num">${money(s.paid)}</td>` : ''}</tr>`; }).join('')}
     </tbody></table>${state.customers.length ? '<p class="empty" id="cust-table-empty" hidden>No customers match.</p>' : '<p class="empty">No customers yet. Add your first one.</p>'}</div>`;
   wireFilters(main);
 };
@@ -543,6 +563,115 @@ VIEWS.services = async main => {
     </tbody></table></div></section>`).join('')}</div>`;
 };
 
+/* ---- Calendar ---- */
+const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const ymd = (y, m, d) => `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+const timeRange = o => (o.start_time ? fmtTime(o.start_time) + (o.duration_minutes ? ' to ' + fmtTime(`${String(Math.floor((toMin(o.start_time) + o.duration_minutes) / 60) % 24).padStart(2, '0')}:${String((toMin(o.start_time) + o.duration_minutes) % 60).padStart(2, '0')}`) : '') : 'No time set');
+VIEWS.calendar = async main => {
+  await reload('orders', 'customers', 'services', 'team');
+  const today = todayStr();
+  if (!ui.cal) { const [y, m] = today.split('-').map(Number); ui.cal = { y, m: m - 1, day: today, who: '' }; }
+  const draw = () => {
+    const c = ui.cal;
+    const jobs = state.orders.filter(o => o.service_date && o.status !== 'Cancelled' && (!c.who || (o.assignee_ids || []).includes(Number(c.who))));
+    const byDay = {};
+    jobs.forEach(o => (byDay[o.service_date] = byDay[o.service_date] || []).push(o));
+    Object.values(byDay).forEach(l => l.sort((a, b) => (a.start_time || '99').localeCompare(b.start_time || '99') || a.id - b.id));
+    const lead = new Date(c.y, c.m, 1).getDay();
+    const total = new Date(c.y, c.m + 1, 0).getDate();
+    const chipFor = o => {
+      const color = (o.assignee_ids || []).length ? crewColor(o.assignee_ids[0]) : 'var(--muted)';
+      return `<button type="button" class="cal-job${['Completed', 'Invoiced'].includes(o.status) ? ' done' : ''}" style="--c:${color}" data-act="open-job" data-id="${o.id}" title="${esc((o.customer_name || '') + ' ' + (o.title || ''))}">${o.start_time ? `<i>${esc(fmtTime(o.start_time).replace(':00', ''))}</i> ` : ''}${esc(o.title || o.customer_name || 'Job')}</button>`;
+    };
+    let cells = '';
+    for (let i = 0; i < Math.ceil((lead + total) / 7) * 7; i++) {
+      const d = i - lead + 1;
+      if (d < 1 || d > total) { cells += '<div class="cal-cell off" aria-hidden="true"></div>'; continue; }
+      const key = ymd(c.y, c.m, d), list = byDay[key] || [];
+      cells += `<div class="cal-cell${key === today ? ' today' : ''}${key === c.day ? ' sel' : ''}" data-act="cal-day" data-day="${key}">
+        <button type="button" class="cal-num" data-act="cal-day" data-day="${key}" aria-label="${MONTH_NAMES[c.m]} ${d}, ${list.length} job${list.length === 1 ? '' : 's'}">${d}</button>
+        <div class="cal-jobs">${list.slice(0, 3).map(chipFor).join('')}${list.length > 3 ? `<span class="cal-more">+${list.length - 3} more</span>` : ''}</div>
+        ${list.length ? `<div class="cal-dots" aria-hidden="true">${list.slice(0, 4).map(o => `<i style="--c:${(o.assignee_ids || []).length ? crewColor(o.assignee_ids[0]) : 'var(--muted)'}"></i>`).join('')}</div>` : ''}</div>`;
+    }
+    const day = byDay[c.day] || [];
+    const needs = state.orders.filter(o => ['Requested', 'Scheduled', 'In progress'].includes(o.status) && (!o.start_time || (can('assign') && !(o.assignee_ids || []).length)));
+    const dayLi = o => `<li data-act="open-job" data-id="${o.id}"><div class="main"><b>${esc(o.title || 'Untitled job')}</b><span>${timeRange(o)} &middot; ${esc(o.customer_name || 'No customer')}</span></div>${crewDots(o.assignee_ids)}${chip(o.status)}</li>`;
+    const needLi = o => `<li data-act="open-job" data-id="${o.id}"><div class="main"><b>${esc(o.title || 'Untitled job')}</b><span>${fmtDate(o.service_date)} &middot; ${esc(o.customer_name || 'No customer')} &middot; ${!o.start_time ? 'no time' : ''}${!o.start_time && can('assign') && !(o.assignee_ids || []).length ? ', ' : ''}${can('assign') && !(o.assignee_ids || []).length ? 'no one assigned' : ''}</span></div>${chip(o.status)}</li>`;
+    const dp = c.day.split('-').map(Number);
+    main.innerHTML = `
+      <div class="page-head"><div><h1>Calendar</h1><p class="sub">${can('assign') ? 'Schedule jobs and put your team on them.' : 'Your assigned jobs.'}</p></div>
+        <div class="head-actions"><button class="btn primary" data-act="new-job-day">New job on ${MONTH_NAMES[dp[1] - 1].slice(0, 3)} ${dp[2]}</button></div></div>
+      <div class="toolbar cal-bar"><button class="btn" data-act="cal-prev" aria-label="Previous month">&larr;</button><h2 class="cal-title">${MONTH_NAMES[c.m]} ${c.y}</h2><button class="btn" data-act="cal-next" aria-label="Next month">&rarr;</button><button class="btn" data-act="cal-today">Today</button>
+        ${can('assign') ? `<select id="cal-who" aria-label="Show jobs for"><option value="">Everyone</option>${state.team.map(u => `<option value="${u.id}"${String(c.who) === String(u.id) ? ' selected' : ''}>${esc(u.name)}</option>`).join('')}</select>` : ''}</div>
+      <div class="cal"><div class="cal-head">${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => `<span>${d}</span>`).join('')}</div><div class="cal-grid">${cells}</div></div>
+      ${can('assign') && state.team.length ? `<div class="cal-legend">${state.team.map(u => `<span class="crew-key"><span class="crew" style="--c:${crewColor(u.id)}">${esc(initials(u.name))}</span>${esc(u.name)}</span>`).join('')}</div>` : ''}
+      <div class="cols" style="margin-top:20px">
+        <section class="panel"><h2>${MONTH_NAMES[dp[1] - 1]} ${dp[2]}${c.day === today ? ' (today)' : ''}</h2>${day.length ? `<ul class="list">${day.map(dayLi).join('')}</ul>` : '<p class="empty">Nothing scheduled this day.</p>'}</section>
+        <section class="panel"><h2>Needs scheduling</h2>${needs.length ? `<ul class="list">${needs.slice(0, 12).map(needLi).join('')}</ul>` : '<p class="empty">Every open job has a time.</p>'}</section>
+      </div>`;
+    const who = $('#cal-who', main);
+    if (who) who.addEventListener('change', () => { ui.cal.who = who.value; draw(); });
+  };
+  ui.calDraw = draw;
+  draw();
+};
+const calMove = n => { const c = ui.cal; c.m += n; if (c.m < 0) { c.m = 11; c.y--; } if (c.m > 11) { c.m = 0; c.y++; } c.day = ymd(c.y, c.m, 1); ui.calDraw(); };
+
+/* ---- Team ---- */
+VIEWS.team = async main => {
+  await reload('users');
+  const cls = { admin: 'accent', accounting: 'info', employee: '' };
+  main.innerHTML = `
+    <div class="page-head"><div><h1>Team</h1><p class="sub">People who can sign in. Each role sees and changes only what it needs.</p></div>
+      <div class="head-actions"><button class="btn primary" data-act="new-user">Add team member</button></div></div>
+    <div class="table-wrap"><table><thead><tr><th>Name</th><th>Username</th><th>Role</th><th>Phone</th><th>Status</th></tr></thead><tbody>
+      ${state.users.map(u => `<tr data-row data-act="open-user" data-id="${u.id}" class="${u.active ? '' : 'dim'}"><td><span class="crew" style="--c:${crewColor(u.id)}">${esc(initials(u.name))}</span> <b>${esc(u.name)}</b>${state.me && u.id === state.me.id ? ' <span class="muted">(you)</span>' : ''}</td><td class="muted">${esc(u.username)}</td><td>${chip(ROLE_INFO[u.role] ? ROLE_INFO[u.role][0] : u.role, cls[u.role])}</td><td>${esc(u.phone)}</td><td>${u.active ? chip('Active', 'ok') : chip('Disabled')}</td></tr>`).join('')}
+    </tbody></table></div>
+    <section class="panel" style="margin-top:20px"><h2>What each role can do</h2><div class="body" style="display:grid;gap:10px">
+      ${Object.entries(ROLE_INFO).map(([k, [label, text]]) => `<div>${chip(label, cls[k])} <span class="hint">${esc(text)}</span></div>`).join('')}
+      <p class="hint">Disable someone instead of deleting them when they leave. They are signed out right away and their past jobs stay in your history.</p></div></section>`;
+};
+function openUser(u) {
+  const isNew = !u;
+  const x = u || { name: '', username: '', role: 'employee', phone: '', active: true };
+  const self = state.me && u && u.id === state.me.id;
+  openDialog(dlg, `<form class="dlg-body" id="user-form">${head(isNew ? 'Add team member' : esc(x.name))}
+    <div class="grid2"><label>Name<input name="name" required value="${esc(x.name)}" autocomplete="off"></label><label>Username<input name="username" required value="${esc(x.username)}" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="letters and numbers, no spaces"></label></div>
+    <div class="grid2"><label>Role<select name="role"${self ? ' disabled' : ''}>${ROLES_LIST.map(r => `<option value="${r}"${x.role === r ? ' selected' : ''}>${ROLE_INFO[r][0]}</option>`).join('')}</select></label><label>Phone<input name="phone" type="tel" value="${esc(x.phone)}"></label></div>
+    <p class="hint" id="u-roletext">${esc(ROLE_INFO[x.role][1])}</p>
+    <label>${isNew ? 'Password' : 'New password'}<input name="password" type="password" autocomplete="new-password" ${isNew ? 'required' : ''} minlength="8" placeholder="${isNew ? 'At least 8 characters' : 'Leave blank to keep the current password'}"></label>
+    ${isNew || self ? '' : `<label class="check"><input type="checkbox" name="active"${x.active ? ' checked' : ''}> Can sign in</label>`}
+    ${self ? '<p class="hint">This is your own account. Another admin has to change your role or disable it.</p>' : ''}
+    <div class="actions">${isNew || self ? '' : '<button type="button" class="btn danger spacer" id="u-del">Delete</button>'}<button type="button" class="btn" data-close>Cancel</button><button class="btn primary" type="submit">Save</button></div></form>`);
+  const form = $('#user-form', dlg);
+  form.elements.role.addEventListener('change', e => { $('#u-roletext').textContent = ROLE_INFO[e.target.value][1]; });
+  form.addEventListener('submit', guard(async e => {
+    e.preventDefault();
+    const f = form.elements;
+    const body = { name: f.name.value, username: f.username.value, role: self ? x.role : f.role.value, phone: f.phone.value, active: isNew || self ? true : f.active.checked };
+    if (f.password.value) body.password = f.password.value;
+    if (isNew) await api('/users', { method: 'POST', body }); else await api('/users/' + x.id, { method: 'PUT', body });
+    await reload('users', 'team');
+    closeDialog(dlg);
+    toast('Team member saved');
+    route();
+  }));
+  if (!isNew && !self) confirmDelete($('#u-del', dlg), async () => { await api('/users/' + x.id, { method: 'DELETE' }); await reload('users', 'team'); closeDialog(dlg); toast('Team member deleted'); route(); });
+}
+function openMyPassword() {
+  openDialog(dlg, `<form class="dlg-body" id="pw-form">${head('Change your password')}
+    <label>Current password<input name="current" type="password" required autocomplete="current-password"></label>
+    <label>New password<input name="next" type="password" required minlength="8" autocomplete="new-password" placeholder="At least 8 characters"></label>
+    <div class="actions"><button type="button" class="btn" data-close>Cancel</button><button class="btn primary" type="submit">Change password</button></div></form>`);
+  $('#pw-form', dlg).addEventListener('submit', guard(async e => {
+    e.preventDefault();
+    const f = e.target.elements;
+    await api('/me/password', { method: 'POST', body: { current: f.current.value, next: f.next.value } });
+    closeDialog(dlg);
+    toast('Password changed');
+  }));
+}
+
 /* ---- Settings ---- */
 VIEWS.settings = async main => {
   await reload('settings');
@@ -599,7 +728,7 @@ function openCustomer(c, { target = dlg, onSaved } = {}) {
     <div class="grid2"><label>Name<input name="name" required value="${esc(x.name)}" autocomplete="off"></label><label>Phone<input name="phone" type="tel" value="${esc(x.phone)}"></label></div>
     <div class="grid2"><label>Email<input name="email" type="email" value="${esc(x.email)}"></label><label>Service address<input name="address" value="${esc(x.address)}" placeholder="Start typing the address" data-addr autocomplete="off"></label></div>
     <label>Notes<textarea name="notes" rows="3" placeholder="Gate codes, equipment, preferences">${esc(x.notes)}</textarea></label>
-    <div class="actions">${isNew ? '' : '<button type="button" class="btn danger spacer" id="cust-del">Delete</button>'}<button type="button" class="btn" data-close>Cancel</button>${isNew ? '' : '<button type="button" class="btn" id="cust-job">New job</button>'}<button class="btn primary" type="submit">Save</button></div></form>`);
+    <div class="actions">${isNew || !can('delete_records') ? '' : '<button type="button" class="btn danger spacer" id="cust-del">Delete</button>'}<button type="button" class="btn" data-close>Cancel</button>${isNew ? '' : '<button type="button" class="btn" id="cust-job">New job</button>'}<button class="btn primary" type="submit">Save</button></div></form>`);
   const form = $('#cust-form', target);
   form.addEventListener('submit', guard(async e => {
     e.preventDefault();
@@ -611,32 +740,56 @@ function openCustomer(c, { target = dlg, onSaved } = {}) {
     if (onSaved) onSaved(saved); else route();
   }));
   if (!isNew) {
-    confirmDelete($('#cust-del', target), async () => { await api('/customers/' + x.id, { method: 'DELETE' }); await reload('customers', 'orders', 'invoices'); closeDialog(target); toast('Customer deleted'); route(); });
+    if (can('delete_records')) confirmDelete($('#cust-del', target), async () => { await api('/customers/' + x.id, { method: 'DELETE' }); await reload('customers', 'orders', 'invoices'); closeDialog(target); toast('Customer deleted'); route(); });
     $('#cust-job', target).addEventListener('click', () => openJob(null, { customer_id: x.id }));
   }
 }
 
 /* ---- Job ---- */
+const toMin = t => { const m = /^(\d{2}):(\d{2})$/.exec(t || ''); return m ? Number(m[1]) * 60 + Number(m[2]) : null; };
+// Warn when someone is already booked at the same time. Only jobs this account can see are checked.
+function scheduleConflicts({ id, date, start, dur, ids }) {
+  const a = toMin(start);
+  if (!date || a === null || !ids.length) return [];
+  const out = [];
+  state.orders.forEach(x => {
+    if (x.id === id || x.service_date !== date || ['Cancelled', 'Completed', 'Invoiced'].includes(x.status)) return;
+    const b = toMin(x.start_time);
+    if (b === null) return;
+    const bEnd = b + (x.duration_minutes || 60);
+    if (!(a < bEnd && b < a + dur)) return;
+    (x.assignee_ids || []).filter(u => ids.includes(u)).forEach(u => out.push(`${crewName(u)} is already on "${x.title || 'Untitled job'}" at ${fmtTime(x.start_time)}.`));
+  });
+  return out;
+}
 function openJob(order, prefill = {}) {
   let isNew = !order;
-  const o = order ? JSON.parse(JSON.stringify(order)) : { customer_id: prefill.customer_id || '', title: prefill.title || '', status: 'Requested', service_date: todayStr(), items: [], notes: prefill.notes || '', one_way_minutes: '' };
+  const o = order ? JSON.parse(JSON.stringify(order)) : { customer_id: prefill.customer_id || '', title: prefill.title || '', status: prefill.start_time || prefill.assignee_ids ? 'Scheduled' : 'Requested', service_date: prefill.service_date || todayStr(), start_time: prefill.start_time || '', duration_minutes: null, assignee_ids: prefill.assignee_ids || [], items: [], notes: prefill.notes || '', one_way_minutes: '' };
+  const mine = state.me ? state.me.id : 0;
   openDialog(dlg, `<form class="dlg-body" id="job-form">${head(isNew ? 'New job' : 'Job #' + o.id)}
     <div class="grid2"><label>What is the job?<input name="title" value="${esc(o.title)}" placeholder="Wi-Fi dead zones, new PC setup, smart lock install"></label>
       <label>Customer<div style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px"><select name="customer_id" id="j-customer">${customerOptions(o.customer_id)}</select><button type="button" class="btn" id="j-newcust">New</button></div></label></div>
     <div class="grid2"><label>Date<input name="service_date" type="date" value="${esc(o.service_date)}"></label><label>Status<select name="status">${opts(ORDER_STATUS, o.status)}</select></label></div>
+    <div class="inline-box"><div class="section-title">Schedule</div>
+      <div class="grid2"><label>Start time<input name="start_time" type="time" step="900" value="${esc(o.start_time || '')}"></label>
+        <label>How long<select name="duration_minutes"><option value="">Not set</option>${DURATIONS.map(([m, l]) => `<option value="${m}"${Number(o.duration_minutes) === m ? ' selected' : ''}>${l}</option>`).join('')}</select></label></div>
+      ${can('assign')
+        ? `<div><div class="section-title" style="margin-bottom:8px">Who is working it</div><div class="crew-pick" id="j-crew">${state.team.map(u => `<label class="check"><input type="checkbox" value="${u.id}"${(o.assignee_ids || []).includes(u.id) ? ' checked' : ''}><span class="crew" style="--c:${crewColor(u.id)}">${esc(initials(u.name))}</span>${esc(u.name)}</label>`).join('') || '<span class="hint">No team members yet. Add them on the Team page.</span>'}</div></div>`
+        : `<div class="hint">${isNew ? 'This job will be assigned to you.' : 'Assigned to: ' + (o.assignee_ids || []).map(crewName).map(esc).join(', ')}</div>`}
+      <p class="hint" id="j-conflict" role="status"></p></div>
     <div class="section-title">Line items</div><div id="j-items"></div>
     <div class="travel-row"><label>One-way drive (min)<input id="j-minutes" type="number" min="0" step="1" value="${esc(o.one_way_minutes ?? '')}"></label><button type="button" class="btn" id="j-addtravel">Add travel charge</button><span class="hint" id="j-travelhint"></span></div>
     ${mileagePanelHtml('j')}
-    <div class="section-title">Parts and equipment bought for this job</div>
+    ${can('expenses') ? `<div class="section-title">Parts and equipment bought for this job</div>
     <div class="receipts" id="j-parts"></div>
-    <div><button type="button" class="btn" id="j-addpart">Add equipment purchase</button></div>
+    <div><button type="button" class="btn" id="j-addpart">Add equipment purchase</button></div>` : ''}
     <label>Notes<textarea name="notes" rows="2" placeholder="Equipment, access, follow-ups">${esc(o.notes)}</textarea></label>
     <div class="totals"><div class="grand"><span>Total</span><span id="j-total"></span></div></div>
     <div class="inline-box" id="j-paid" hidden><div class="section-title">Mark paid in full</div>
       <div class="grid2"><label>Payment method<select id="j-method">${opts(PAY_METHODS, 'Venmo')}</select></label><label>Date paid<input id="j-paiddate" type="date" value="${todayStr()}"></label></div>
       <div class="actions"><button type="button" class="btn" id="j-paidcancel">Cancel</button><button type="button" class="btn primary" id="j-paidok">Save and mark paid</button></div></div>
-    <div class="actions">${isNew ? '' : '<button type="button" class="btn danger spacer" id="j-del">Delete</button>'}<button type="button" class="btn" data-close>Close</button>
-      ${o.invoice_id ? '<button type="button" class="btn" id="j-viewinv">View invoice</button>' : '<button type="button" class="btn" id="j-inv">Create invoice</button><button type="button" class="btn" id="j-paidbtn">Paid in full</button>'}
+    <div class="actions">${isNew || !can('delete_records') ? '' : '<button type="button" class="btn danger spacer" id="j-del">Delete</button>'}<button type="button" class="btn" data-close>Close</button>
+      ${!can('invoices') ? '' : o.invoice_id ? '<button type="button" class="btn" id="j-viewinv">View invoice</button>' : '<button type="button" class="btn" id="j-inv">Create invoice</button><button type="button" class="btn" id="j-paidbtn">Paid in full</button>'}
       <button class="btn primary" type="submit">Save job</button></div></form>`);
   const form = $('#job-form', dlg);
   let mil = null;
@@ -651,19 +804,30 @@ function openJob(order, prefill = {}) {
     ed.add(travelItem(m));
   });
   $('#j-newcust').addEventListener('click', () => openCustomer(null, { target: dlg2, onSaved: c => { const sel = $('#j-customer'); sel.innerHTML = customerOptions(c.id); sel.dispatchEvent(new Event('change')); } }));
+  const crewIds = () => (can('assign') ? $$('#j-crew input:checked', dlg).map(x => Number(x.value)) : (o.assignee_ids && o.assignee_ids.length ? o.assignee_ids : [mine]));
   const collect = () => ({
     title: form.elements.title.value, customer_id: form.elements.customer_id.value || null, service_date: form.elements.service_date.value,
-    status: form.elements.status.value, notes: form.elements.notes.value, one_way_minutes: $('#j-minutes').value || null, items: o.items,
+    start_time: form.elements.start_time.value, duration_minutes: form.elements.duration_minutes.value || null,
+    ...(can('assign') ? { assignee_ids: crewIds() } : {}),
+    status: form.elements.status.value === 'Requested' && form.elements.start_time.value && crewIds().length ? 'Scheduled' : form.elements.status.value, notes: form.elements.notes.value, one_way_minutes: $('#j-minutes').value || null, items: o.items,
     from_addr: $('#j-from').value, one_way_miles: $('#j-miles').value || null,
   });
+  const showConflicts = () => {
+    const c = scheduleConflicts({ id: o.id, date: form.elements.service_date.value, start: form.elements.start_time.value, dur: Number(form.elements.duration_minutes.value) || 60, ids: crewIds() });
+    $('#j-conflict').innerHTML = c.length ? c.map(x => `<span class="warn-text">Heads up: ${esc(x)}</span>`).join('<br>') : '';
+  };
+  ['service_date', 'start_time', 'duration_minutes'].forEach(n => form.elements[n].addEventListener('change', showConflicts));
+  if (can('assign')) $('#j-crew', dlg).addEventListener('change', showConflicts);
+  showConflicts();
   const save = async () => {
     const saved = isNew ? await api('/orders', { method: 'POST', body: collect() }) : await api('/orders/' + o.id, { method: 'PUT', body: collect() });
     if (isNew) { isNew = false; o.id = saved.id; }
     const trip = mil && mil.takeTrip();
-    if (trip) await api('/mileage', { method: 'POST', body: { ...trip, order_id: o.id } });
+    if (trip && can('mileage')) await api('/mileage', { method: 'POST', body: { ...trip, order_id: o.id } });
     return saved;
   };
-  reload('mileage', 'settings', 'services', 'customers').then(() => {
+  reload('mileage', 'settings', 'services', 'customers', 'team').then(() => {
+    showConflicts();
     mil = wireMileage({ p: 'j', items: o.items, ed, onTotal: updateTotal, customerEl: $('#j-customer'), dateEl: form.elements.service_date, minutesEl: $('#j-minutes'), from: o.from_addr, miles: o.one_way_miles });
   }).catch(() => {});
   const renderParts = () => {
@@ -673,12 +837,14 @@ function openJob(order, prefill = {}) {
       ? list.map(x => `<div class="receipt"><span>${esc(x.vendor)}${x.description ? ': ' + esc(x.description) : ''}</span><span class="num">${money(x.amount)}</span></div>`).join('') + `<p class="hint">Your cost so far: ${money(cost)}. Edit these any time on the Expenses page.</p>`
       : '<p class="hint">Nothing added yet. Equipment you add here is saved as an expense, with its receipt, and can be billed to the customer on this job.</p>';
   };
-  if (o.id) reload('expenses').then(renderParts).catch(() => {}); else renderParts();
-  $('#j-addpart').addEventListener('click', guard(async () => {
-    if (isNew) await save();
-    await reload('expenses');
-    openPart(o.id, o.customer_id || null, line => ed.add(line), async () => { await reload('expenses'); renderParts(); });
-  }));
+  if (can('expenses')) {
+    if (o.id) reload('expenses').then(renderParts).catch(() => {}); else renderParts();
+    $('#j-addpart').addEventListener('click', guard(async () => {
+      if (isNew) await save();
+      await reload('expenses');
+      openPart(o.id, o.customer_id || null, line => ed.add(line), async () => { await reload('expenses'); renderParts(); });
+    }));
+  }
   form.addEventListener('submit', guard(async e => {
     e.preventDefault();
     await save();
@@ -687,7 +853,9 @@ function openJob(order, prefill = {}) {
     toast('Job saved');
     route();
   }));
-  if (o.invoice_id) {
+  if (!can('invoices')) {
+    // no invoice buttons for this role
+  } else if (o.invoice_id) {
     $('#j-viewinv').addEventListener('click', () => openInvoice(findBy(state.invoices, o.invoice_id)));
   } else {
     $('#j-inv').addEventListener('click', guard(async () => {
@@ -708,7 +876,7 @@ function openJob(order, prefill = {}) {
       route();
     }));
   }
-  if (!isNew) confirmDelete($('#j-del'), async () => { await api('/orders/' + o.id, { method: 'DELETE' }); await reload('orders', 'invoices'); closeDialog(dlg); toast('Job deleted'); route(); });
+  if (!isNew && can('delete_records')) confirmDelete($('#j-del'), async () => { await api('/orders/' + o.id, { method: 'DELETE' }); await reload('orders', 'invoices'); closeDialog(dlg); toast('Job deleted'); route(); });
 }
 
 /* ---- Mileage charge (shared by jobs and invoices) ---- */
@@ -1114,6 +1282,14 @@ const ACTIONS = {
   'grp-up': t => moveGroup(t.dataset.cat, -1),
   'grp-down': t => moveGroup(t.dataset.cat, 1),
   'open-inquiry': t => openInquiry(findBy(state.inquiries, t.dataset.id)),
+  'open-user': t => openUser(findBy(state.users, t.dataset.id)),
+  'new-user': () => openUser(null),
+  'my-password': () => openMyPassword(),
+  'cal-prev': () => calMove(-1),
+  'cal-next': () => calMove(1),
+  'cal-today': () => { const [y, m] = todayStr().split('-').map(Number); Object.assign(ui.cal, { y, m: m - 1, day: todayStr() }); ui.calDraw(); },
+  'cal-day': t => { ui.cal.day = t.dataset.day; ui.calDraw(); },
+  'new-job-day': () => openJob(null, { service_date: ui.cal ? ui.cal.day : todayStr() }),
   'add-rate': () => { $('#rates').insertAdjacentHTML('beforeend', rateRow(null)); },
   'rm-rate': t => t.closest('.rate-row').remove(),
   'save-rates': guard(async () => {
@@ -1152,14 +1328,15 @@ function renderShell() {
   $('#app').innerHTML = `<div class="shell">
     <aside class="side">
       <a class="brand" href="#/dashboard"><span class="mark" aria-hidden="true">PSS</span><span class="brand-name">${esc(state.settings.business_name || 'Page Smart Solutions')}</span></a>
-      <nav id="nav" aria-label="Admin">${NAV.map(([k, label]) => `<a href="#/${k}" data-view="${k}">${label}</a>`).join('')}</nav>
-      <div class="side-foot"><a href="/" target="_blank" rel="noopener">View public site</a><button class="btn small" data-act="logout">Sign out</button></div>
+      <nav id="nav" aria-label="Admin">${NAV.filter(n => !n[2] || can(n[2])).map(([k, label]) => `<a href="#/${k}" data-view="${k}">${label}</a>`).join('')}</nav>
+      <div class="side-foot">${state.me ? `<div class="who"><b>${esc(state.me.name)}</b><span>${esc(ROLE_INFO[state.me.role] ? ROLE_INFO[state.me.role][0] : state.me.role)}</span></div>` : ''}<a href="/" target="_blank" rel="noopener">View public site</a><button class="btn small" data-act="my-password">Change password</button><button class="btn small" data-act="logout">Sign out</button></div>
     </aside><main id="main"></main></div>`;
 }
 
 async function route() {
   const name = location.hash.replace(/^#\/?/, '').split('/')[0] || 'dashboard';
-  ui.view = VIEWS[name] ? name : 'dashboard';
+  const allowed = NAV.some(n => n[0] === name && (!n[2] || can(n[2])));
+  ui.view = VIEWS[name] && allowed ? name : 'dashboard';
   if (!$('#main')) renderShell();
   $$('#nav a').forEach(a => { if (a.dataset.view === ui.view) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
   updateBadge();
@@ -1172,25 +1349,34 @@ async function route() {
 }
 window.addEventListener('hashchange', () => { if (state.signedIn) route(); });
 
+const lastUser = () => { try { return localStorage.getItem('pss_user') || ''; } catch { return ''; } };
 function showLogin(message = '') {
   state.signedIn = false;
   [dlg, dlg2].forEach(closeDialog);
   $('#app').innerHTML = `<div class="login"><form id="login-form">
     <div class="brand"><span class="mark" aria-hidden="true">PSS</span><span class="brand-name">Admin</span></div>
     <h1>Sign in</h1>
-    <label>Password<input type="password" name="password" required autocomplete="current-password" autofocus></label>
+    <label>Username<input name="username" required autocomplete="username" autocapitalize="none" spellcheck="false" value="${esc(lastUser())}"></label>
+    <label>Password<input type="password" name="password" required autocomplete="current-password"></label>
     <p class="err" id="login-err" role="alert">${esc(message)}</p>
     <button class="btn primary" type="submit">Sign in</button></form></div>`;
+  const lf = $('#login-form').elements;
+  (lf.username.value ? lf.password : lf.username).focus();
   $('#login-form').addEventListener('submit', async e => {
     e.preventDefault();
     try {
-      await api('/login', { method: 'POST', body: { password: e.target.elements.password.value } });
+      try { localStorage.setItem('pss_user', e.target.elements.username.value.trim().toLowerCase()); } catch { /* optional */ }
+      await api('/login', { method: 'POST', body: { username: e.target.elements.username.value, password: e.target.elements.password.value } });
       await start();
     } catch (err) { $('#login-err').textContent = err.message; }
   });
 }
 
 async function start() {
+  const me = await api('/me');
+  state.me = me.user;
+  state.caps = me.caps || {};
+  ui.cal = null;
   await reload();
   state.signedIn = true;
   renderShell();
@@ -1199,7 +1385,6 @@ async function start() {
 
 (async () => {
   try {
-    await api('/me');
     await start();
   } catch (e) {
     if (e.message !== 'auth') showLogin(e.message);

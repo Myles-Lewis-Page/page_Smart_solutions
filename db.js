@@ -163,6 +163,28 @@ const SCHEMA = [
   `ALTER TABLE invoices ADD COLUMN IF NOT EXISTS public_token TEXT`,
   `CREATE UNIQUE INDEX IF NOT EXISTS invoices_token_idx ON invoices(public_token)`,
   `ALTER TABLE services ADD COLUMN IF NOT EXISTS no_travel BOOLEAN NOT NULL DEFAULT FALSE`,
+  // Team accounts and scheduling
+  `CREATE TABLE IF NOT EXISTS users (
+     id SERIAL PRIMARY KEY,
+     username TEXT NOT NULL,
+     name TEXT NOT NULL DEFAULT '',
+     role TEXT NOT NULL DEFAULT 'employee',
+     password_hash TEXT NOT NULL,
+     phone TEXT NOT NULL DEFAULT '',
+     active BOOLEAN NOT NULL DEFAULT TRUE,
+     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+   )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS users_username_idx ON users(lower(username))`,
+  `ALTER TABLE orders ADD COLUMN IF NOT EXISTS start_time TEXT NOT NULL DEFAULT ''`,
+  `ALTER TABLE orders ADD COLUMN IF NOT EXISTS duration_minutes INTEGER`,
+  `ALTER TABLE orders ADD COLUMN IF NOT EXISTS created_by INTEGER REFERENCES users(id) ON DELETE SET NULL`,
+  `CREATE TABLE IF NOT EXISTS job_assignments (
+     order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+     PRIMARY KEY (order_id, user_id)
+   )`,
+  `CREATE INDEX IF NOT EXISTS job_assignments_user_idx ON job_assignments(user_id)`,
+  `CREATE INDEX IF NOT EXISTS orders_date_idx ON orders(service_date)`,
 ];
 
 let client = null;

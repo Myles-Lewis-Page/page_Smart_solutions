@@ -105,6 +105,85 @@ const ok = (name, cond) => { assert.ok(cond, name); console.log('  ok  ' + name)
     r = await call('DELETE', `/api/invoices/${invId}`); ok('invoice deleted', r.status === 200);
     r = await call('GET', '/api/orders'); ok('job back to Completed', r.data[0].status === 'Completed');
 
+    // team accounts and roles
+    const adminCookie = cookie;
+    const loginAs = async (username, password) => { cookie = ''; const x = await call('POST', '/api/login', { username, password }); cookie = x.status === 200 ? x.headers.get('set-cookie').split(';')[0] : ''; return x; };
+    r = await call('GET', '/api/me'); ok('me is the owner admin', r.data.user.username === 'admin' && r.data.user.role === 'admin' && r.data.caps.users === true);
+    r = await call('POST', '/api/users', { username: 'Bad Name', name: 'X', role: 'employee', password: 'longenough1' }); ok('bad username rejected', r.status === 422);
+    r = await call('POST', '/api/users', { username: 'sam', name: 'Sam Books', role: 'accounting', password: 'short' }); ok('short password rejected', r.status === 422);
+    r = await call('POST', '/api/users', { username: 'sam', name: 'Sam Books', role: 'accounting', password: 'accounting-pass' }); ok('accounting user created', r.status === 200 && r.data.role === 'accounting' && !('password_hash' in r.data));
+    const samId = r.data.id;
+    r = await call('POST', '/api/users', { username: 'SAM', name: 'Dup', role: 'employee', password: 'employee-pass' }); ok('duplicate username rejected', r.status === 409 || r.status === 422);
+    r = await call('POST', '/api/users', { username: 'eli', name: 'Eli Field', role: 'employee', password: 'employee-pass' }); ok('employee user created', r.status === 200);
+    const eliId = r.data.id;
+    r = await call('POST', '/api/users', { username: 'zoe', name: 'Zoe Field', role: 'employee', password: 'employee-pass' });
+    const zoeId = r.data.id;
+    r = await call('PUT', '/api/users/1', { name: 'Owner', role: 'employee', active: true }); ok('cannot demote yourself or the last admin', r.status === 422);
+    r = await call('DELETE', '/api/users/1'); ok('cannot delete yourself', r.status === 422);
+
+    // a job scheduled for Eli, one for Zoe
+    r = await call('POST', '/api/orders', { customer_id: cust.id, title: 'Eli job', status: 'Scheduled', service_date: '2026-08-03', start_time: '09:30', duration_minutes: 90, items: [], assignee_ids: [eliId] });
+    ok('admin schedules and assigns a job', r.status === 200 && r.data.start_time === '09:30' && r.data.duration_minutes === 90 && r.data.assignee_ids.length === 1 && r.data.assignee_ids[0] === eliId);
+    const eliJob = r.data.id;
+    r = await call('POST', '/api/orders', { customer_id: cust.id, title: 'Zoe job', status: 'Scheduled', service_date: '2026-08-03', start_time: 'banana', items: [], assignee_ids: [zoeId] });
+    ok('bad start time is dropped', r.status === 200 && r.data.start_time === '');
+    const zoeJob = r.data.id;
+
+    r = await loginAs('sam', 'wrong-pass'); ok('wrong password rejected for named user', r.status === 401);
+    r = await loginAs('sam', 'accounting-pass'); ok('accounting login', r.status === 200);
+    r = await call('GET', '/api/me'); ok('accounting caps', r.data.caps.services_edit === true && r.data.caps.invoices === true && r.data.caps.settings_edit === false && r.data.caps.users === false);
+    r = await call('PUT', `/api/services/${netTs.id}`, { ...netTs, price: 80 }); ok('accounting can change prices', r.status === 200 && r.data.price === 80);
+    r = await call('PUT', `/api/services/${netTs.id}`, { ...netTs, price: 75 });
+    r = await call('GET', '/api/invoices'); ok('accounting can read invoices', r.status === 200);
+    r = await call('POST', '/api/orders', { customer_id: cust.id, title: 'Added by accounting', items: [], assignee_ids: [eliId] }); ok('accounting can add jobs', r.status === 200);
+    r = await call('GET', '/api/orders'); ok('accounting sees all jobs', r.data.length >= 3);
+    r = await call('PUT', '/api/settings', { business_name: 'Hacked' }); ok('accounting cannot change settings', r.status === 403);
+    r = await call('GET', '/api/expenses'); ok('accounting cannot see expenses', r.status === 403);
+    r = await call('GET', '/api/tax/2026'); ok('accounting cannot see tax', r.status === 403);
+    r = await call('GET', '/api/users'); ok('accounting cannot see users', r.status === 403);
+    r = await call('GET', '/api/team'); ok('accounting can list team names', r.status === 200 && r.data.length === 4 && !('username' in r.data[0]));
+    r = await call('GET', '/api/dashboard'); ok('accounting dashboard hides profit and tax', r.status === 200 && r.data.profitYtd === null && r.data.setAside === null);
+
+    r = await loginAs('eli', 'employee-pass'); ok('employee login', r.status === 200);
+    r = await call('GET', '/api/orders'); ok('employee sees only own jobs', r.data.length >= 2 && r.data.every(o => o.assignee_ids.includes(eliId)) && !r.data.some(o => o.id === zoeJob));
+    r = await call('PUT', `/api/orders/${zoeJob}`, { title: 'Take over', items: [] }); ok('employee cannot edit a job that is not theirs', r.status === 404);
+    r = await call('PUT', `/api/orders/${eliJob}`, { customer_id: cust.id, title: 'Eli job', status: 'In progress', service_date: '2026-08-03', start_time: '10:00', items: [], assignee_ids: [zoeId] });
+    ok('employee can update own job but not reassign it', r.status === 200 && r.data.status === 'In progress' && r.data.assignee_ids.length === 1 && r.data.assignee_ids[0] === eliId);
+    r = await call('POST', '/api/orders', { customer_id: cust.id, title: 'Eli adds one', items: [], assignee_ids: [zoeId] });
+    ok('employee adds a job assigned to themselves', r.status === 200 && r.data.assignee_ids.length === 1 && r.data.assignee_ids[0] === eliId);
+    r = await call('PUT', `/api/customers/${cust.id}`, { name: 'Test Customer', phone: '555-0199', address: '1 Main St', notes: 'Gate code 1234' }); ok('employee can update client info', r.status === 200 && r.data.phone === '555-0199');
+    r = await call('POST', '/api/customers', { name: 'Walk-in' }); ok('employee can add a client', r.status === 200);
+    r = await call('DELETE', `/api/customers/${cust.id}`); ok('employee cannot delete a client', r.status === 403);
+    r = await call('DELETE', `/api/orders/${eliJob}`); ok('employee cannot delete a job', r.status === 403);
+    r = await call('GET', '/api/invoices'); ok('employee cannot see invoices', r.status === 403);
+    r = await call('POST', `/api/orders/${eliJob}/invoice`, {}); ok('employee cannot create invoices', r.status === 403);
+    r = await call('PUT', `/api/services/${netTs.id}`, { ...netTs, price: 1 }); ok('employee cannot change prices', r.status === 403);
+    r = await call('GET', '/api/services'); ok('employee can read the price list', r.status === 200);
+    r = await call('GET', '/api/inquiries'); ok('employee cannot read the inbox', r.status === 403);
+    r = await call('GET', '/api/mileage'); ok('employee cannot see mileage', r.status === 403);
+    r = await call('GET', '/api/dashboard'); ok('employee dashboard has jobs and no money', r.status === 200 && r.data.orders.length >= 1 && r.data.paidYtd === null && r.data.unpaid.length === 0);
+    r = await call('POST', '/api/me/password', { current: 'nope', next: 'brand-new-pass' }); ok('wrong current password refused', r.status === 422);
+    r = await call('POST', '/api/me/password', { current: 'employee-pass', next: 'brand-new-pass' }); ok('employee changes own password', r.status === 200);
+    cookie = r.headers.get('set-cookie').split(';')[0];
+    r = await call('GET', '/api/me'); ok('still signed in after password change', r.status === 200);
+
+    r = await loginAs('eli', 'employee-pass'); ok('old password no longer works', r.status === 401);
+    r = await loginAs('eli', 'brand-new-pass'); ok('new password works', r.status === 200);
+    const eliCookie = cookie;
+    cookie = adminCookie;
+    r = await call('PUT', `/api/users/${eliId}`, { name: 'Eli Field', role: 'employee', active: false });
+    ok('admin deactivates a user', r.status === 200 && r.data.active === false);
+    cookie = eliCookie;
+    r = await call('GET', '/api/orders'); ok('deactivated user is signed out', r.status === 401);
+    cookie = adminCookie;
+    r = await call('PUT', `/api/users/${samId}`, { name: 'Sam Books', role: 'accounting', active: true, password: 'reset-by-admin' }); ok('admin resets a password', r.status === 200);
+    r = await loginAs('sam', 'accounting-pass'); ok('reset invalidates the old password', r.status === 401);
+    r = await loginAs('sam', 'reset-by-admin'); ok('reset password works', r.status === 200);
+    r = await loginAs('admin', 'test-pass'); ok('ADMIN_PASSWORD still opens the owner account', r.status === 200);
+    r = await call('DELETE', `/api/users/${zoeId}`); ok('admin can delete a user', r.status === 200);
+    r = await call('GET', '/api/orders'); ok('deleting a user keeps their jobs', r.data.some(o => o.id === zoeJob));
+    cookie = adminCookie;
+
     // pure tax checks
     const big = computeTax({ revenue: 10000, expenses: 0, mileageDeduction: 0, salary: 55000, withholding: 0, stdDeduction: 16100, ssWageBase: 184500, brackets: DEFAULT_BRACKETS_2026, qbiEnabled: false });
     ok('SE tax on $10,000 profit is $1,412.96', Math.abs(big.seTax - 1412.96) < 0.01);

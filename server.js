@@ -188,19 +188,97 @@ const SESSION_MS = 30 * 24 * 3600 * 1000;
 
 const sign = value => crypto.createHmac('sha256', SECRET).update(value).digest('hex');
 const sha = v => crypto.createHash('sha256').update(String(v)).digest();
+const safeEqual = (a, b) => crypto.timingSafeEqual(sha(a), sha(b));
 
-function makeToken() {
-  const exp = String(Date.now() + SESSION_MS);
-  return `${exp}.${sign(exp)}`;
+// ---------- roles ----------
+// One place decides who can do what. The admin screens read the same table through /api/me.
+const ROLES = ['admin', 'accounting', 'employee'];
+const ROLE_LABEL = { admin: 'Admin', accounting: 'Accounting', employee: 'Employee' };
+const R = {
+  admin: ['admin'],
+  money: ['admin', 'accounting'],
+  all: ['admin', 'accounting', 'employee'],
+};
+const CAPS = {
+  users: R.admin,          // add and manage team members
+  settings_edit: R.admin,  // business settings
+  financial: R.admin,      // tax page, profit and set-aside numbers
+  expenses: R.admin,       // expenses and receipts
+  mileage: R.admin,        // mileage tax tracker
+  invoices: R.money,       // see, create and change invoices (including saved ones)
+  inquiries: R.money,      // contact form inbox
+  services_edit: R.money,  // price list changes
+  assign: R.money,         // choose who works a job
+  delete_records: R.money, // delete jobs and customers
+};
+const capsFor = role => Object.fromEntries(Object.entries(CAPS).map(([k, roles]) => [k, roles.includes(role)]));
+
+// Who may call which API path. First match wins. Methods not listed fall back to '*'.
+const RULES = [
+  [/^\/notify-test$/, { '*': R.admin }],
+  [/^\/settings$/, { GET: R.all, '*': R.admin }],
+  [/^\/services(-order)?(\/|$)/, { GET: R.all, '*': R.money }],
+  [/^\/customers(\/|$)/, { GET: R.all, POST: R.all, PUT: R.all, '*': R.money }],
+  [/^\/orders\/\d+\/invoice$/, { '*': R.money }],
+  [/^\/orders(\/|$)/, { GET: R.all, POST: R.all, PUT: R.all, '*': R.money }],
+  [/^\/invoices(\/|$)/, { '*': R.money }],
+  [/^\/inquiries(\/|$)/, { '*': R.money }],
+  [/^\/(expenses|receipts|mileage|mileage-rates|tax)(\/|$)/, { '*': R.admin }],
+  [/^\/(address|distance|dashboard|team|me)(\/|$)/, { '*': R.all }],
+  [/^\/users(\/|$)/, { '*': R.admin }],
+];
+function roleGate(req, res, next) {
+  const rule = RULES.find(([re]) => re.test(req.path));
+  if (!rule) return next(); // unknown paths end in the normal 404
+  const roles = rule[1][req.method] || rule[1]['*'];
+  if (roles.includes(req.user.role)) return next();
+  return res.status(403).json({ error: 'Your account does not have access to that.' });
 }
-function validToken(token) {
-  if (!token) return false;
-  const [exp, mac] = token.split('.');
-  if (!exp || !mac || Number(exp) < Date.now()) return false;
-  const want = Buffer.from(sign(exp));
+
+// ---------- passwords ----------
+function hashPassword(pw) {
+  const salt = crypto.randomBytes(16);
+  return new Promise((resolve, reject) => crypto.scrypt(String(pw), salt, 32, (err, key) => (err ? reject(err) : resolve(`scrypt$${salt.toString('hex')}$${key.toString('hex')}`))));
+}
+function checkPassword(pw, stored) {
+  const [kind, saltHex, keyHex] = String(stored || '').split('$');
+  if (kind !== 'scrypt' || !saltHex || !keyHex) return Promise.resolve(false);
+  return new Promise(resolve => crypto.scrypt(String(pw), Buffer.from(saltHex, 'hex'), 32, (err, key) => {
+    const want = Buffer.from(keyHex, 'hex');
+    resolve(!err && key.length === want.length && crypto.timingSafeEqual(key, want));
+  }));
+}
+const passwordOk = pw => typeof pw === 'string' && pw.length >= 8 && pw.length <= 200;
+const USERNAME_RE = /^[a-z0-9][a-z0-9._-]{2,29}$/;
+
+// ---------- sessions ----------
+// Cookie value: userId.expiry.mac. The mac covers a fingerprint of the password hash, so changing a password signs that person out everywhere.
+const fingerprint = u => sha(u.password_hash).toString('hex').slice(0, 16);
+function makeToken(u) {
+  const body = `${u.id}.${Date.now() + SESSION_MS}`;
+  return `${body}.${sign(body + '.' + fingerprint(u))}`;
+}
+async function userFromToken(token) {
+  const parts = String(token || '').split('.');
+  if (parts.length !== 3) return null;
+  const [id, exp, mac] = parts;
+  if (!/^\d+$/.test(id) || !/^\d+$/.test(exp) || Number(exp) < Date.now()) return null;
+  const u = (await q('SELECT * FROM users WHERE id=$1', [Number(id)])).rows[0];
+  if (!u || !u.active) return null;
+  const want = Buffer.from(sign(`${id}.${exp}.${fingerprint(u)}`));
   const got = Buffer.from(mac);
-  return want.length === got.length && crypto.timingSafeEqual(want, got);
+  return want.length === got.length && crypto.timingSafeEqual(want, got) ? u : null;
 }
+const publicUser = u => ({ id: u.id, username: u.username, name: u.name || u.username, role: u.role, phone: u.phone, active: u.active });
+const sessionCookie = (req, value, maxAge) => `${COOKIE}=${encodeURIComponent(value)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}${req.secure ? '; Secure' : ''}`;
+
+// The first admin account is created from ADMIN_PASSWORD the first time the server starts.
+async function ensureOwner() {
+  const n = (await q('SELECT COUNT(*)::int AS n FROM users')).rows[0].n;
+  if (n > 0) return;
+  await q("INSERT INTO users(username, name, role, password_hash) VALUES ('admin', 'Owner', 'admin', $1)", [await hashPassword(PASSWORD)]);
+}
+const ownerId = async () => ((await q("SELECT id FROM users WHERE role='admin' ORDER BY id LIMIT 1")).rows[0] || {}).id;
 function cookies(req) {
   const out = {};
   for (const part of String(req.headers.cookie || '').split(';')) {
@@ -209,7 +287,12 @@ function cookies(req) {
   }
   return out;
 }
-const requireAuth = (req, res, next) => (validToken(cookies(req)[COOKIE]) ? next() : res.status(401).json({ error: 'Sign in required' }));
+const requireAuth = ah(async (req, res, next) => {
+  const u = await userFromToken(cookies(req)[COOKIE]);
+  if (!u) return res.status(401).json({ error: 'Sign in required' });
+  req.user = u;
+  next();
+});
 
 function limiter(max, windowMs) {
   const hits = new Map();
@@ -335,13 +418,22 @@ function createApp() {
     res.json({ ok: true });
   }));
 
-  app.post('/api/login', limiter(8, 10 * 60 * 1000), (req, res) => {
-    const given = sha(req.body && req.body.password);
-    if (!PASSWORD || !crypto.timingSafeEqual(given, sha(PASSWORD))) return res.status(401).json({ error: 'Wrong password.' });
-    const secure = req.secure ? '; Secure' : '';
-    res.set('Set-Cookie', `${COOKIE}=${encodeURIComponent(makeToken())}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_MS / 1000}${secure}`);
-    res.json({ ok: true });
-  });
+  app.post('/api/login', limiter(20, 10 * 60 * 1000), ah(async (req, res) => {
+    const username = str(req.body && req.body.username, 60).toLowerCase() || 'admin';
+    const given = String((req.body && req.body.password) || '');
+    const u = (await q('SELECT * FROM users WHERE lower(username)=$1', [username])).rows[0];
+    let good = false;
+    if (u && u.active) {
+      good = await checkPassword(given, u.password_hash);
+      // Recovery: the ADMIN_PASSWORD set in Railway always opens the first admin account.
+      if (!good && PASSWORD && u.id === (await ownerId()) && safeEqual(given, PASSWORD)) good = true;
+    } else {
+      await checkPassword(given, 'scrypt$00$00'); // keep timing similar when the username is unknown
+    }
+    if (!good) return res.status(401).json({ error: 'Wrong username or password.' });
+    res.set('Set-Cookie', sessionCookie(req, makeToken(u), SESSION_MS / 1000));
+    res.json({ ok: true, user: publicUser(u) });
+  }));
   app.post('/api/logout', (req, res) => {
     res.set('Set-Cookie', `${COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`);
     res.json({ ok: true });
@@ -370,8 +462,59 @@ function createApp() {
   }));
 
   // Everything below needs the admin login
-  app.use('/api', requireAuth);
-  app.get('/api/me', (req, res) => res.json({ ok: true }));
+  app.use('/api', requireAuth, roleGate);
+  app.get('/api/me', (req, res) => res.json({ ok: true, user: publicUser(req.user), caps: capsFor(req.user.role) }));
+  app.post('/api/me/password', limiter(10, 10 * 60 * 1000), ah(async (req, res) => {
+    const { current, next } = req.body || {};
+    if (!(await checkPassword(current, req.user.password_hash)) && !(req.user.id === (await ownerId()) && PASSWORD && safeEqual(current, PASSWORD))) throw httpError(422, 'Your current password is not right.');
+    if (!passwordOk(next)) throw httpError(422, 'The new password needs at least 8 characters.');
+    const hash = await hashPassword(next);
+    await q('UPDATE users SET password_hash=$1 WHERE id=$2', [hash, req.user.id]);
+    // Keep this browser signed in with the new password
+    res.set('Set-Cookie', sessionCookie(req, makeToken({ ...req.user, password_hash: hash }), SESSION_MS / 1000));
+    res.json({ ok: true });
+  }));
+
+  // Team members (admin only), plus a names-only list everyone can use to schedule jobs
+  app.get('/api/team', ah(async (req, res) => res.json((await q('SELECT id, name, username, role FROM users WHERE active ORDER BY lower(name), id')).rows.map(u => ({ id: u.id, name: u.name || u.username, role: u.role })))));
+  const userBody = async (b, existing) => {
+    const username = str(b.username, 30).toLowerCase();
+    if (!USERNAME_RE.test(username)) throw httpError(422, 'Username must be 3 to 30 letters, numbers, dots, dashes or underscores.');
+    if (!ROLES.includes(b.role)) throw httpError(422, 'Pick a role.');
+    if (!str(b.name)) throw httpError(422, 'Name is required.');
+    return { username, name: str(b.name, 100), role: b.role, phone: str(b.phone, 40), active: b.active !== false && b.active !== 'false' };
+  };
+  const otherAdmins = async id => (await q("SELECT COUNT(*)::int AS n FROM users WHERE role='admin' AND active AND id<>$1", [id])).rows[0].n;
+  app.get('/api/users', ah(async (req, res) => res.json((await q('SELECT * FROM users ORDER BY active DESC, lower(name), id')).rows.map(publicUser))));
+  app.post('/api/users', ah(async (req, res) => {
+    const f = await userBody(req.body);
+    if (!passwordOk(req.body.password)) throw httpError(422, 'Set a password of at least 8 characters.');
+    const r = await q('INSERT INTO users(username,name,role,phone,active,password_hash) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *', [f.username, f.name, f.role, f.phone, f.active, await hashPassword(req.body.password)]);
+    res.json(publicUser(r.rows[0]));
+  }));
+  app.put('/api/users/:id', ah(async (req, res) => {
+    const id = Number(req.params.id);
+    const cur = (await q('SELECT * FROM users WHERE id=$1', [id])).rows[0];
+    if (!cur) throw httpError(404, 'Not found');
+    const f = await userBody({ username: cur.username, ...req.body }, cur);
+    if (cur.role === 'admin' && cur.active && (f.role !== 'admin' || !f.active) && !(await otherAdmins(id))) throw httpError(422, 'There must always be at least one active admin.');
+    if (id === req.user.id && (!f.active || f.role !== 'admin')) throw httpError(422, 'You cannot lock yourself out. Ask another admin to change your own role.');
+    if (req.body.password) {
+      if (!passwordOk(req.body.password)) throw httpError(422, 'The new password needs at least 8 characters.');
+      await q('UPDATE users SET password_hash=$1 WHERE id=$2', [await hashPassword(req.body.password), id]);
+    }
+    const r = await q('UPDATE users SET username=$1,name=$2,role=$3,phone=$4,active=$5 WHERE id=$6 RETURNING *', [f.username, f.name, f.role, f.phone, f.active, id]);
+    res.json(publicUser(r.rows[0]));
+  }));
+  app.delete('/api/users/:id', ah(async (req, res) => {
+    const id = Number(req.params.id);
+    const cur = (await q('SELECT * FROM users WHERE id=$1', [id])).rows[0];
+    if (!cur) throw httpError(404, 'Not found');
+    if (id === req.user.id) throw httpError(422, 'You cannot delete your own account.');
+    if (cur.role === 'admin' && cur.active && !(await otherAdmins(id))) throw httpError(422, 'There must always be at least one active admin.');
+    await q('DELETE FROM users WHERE id=$1', [id]);
+    res.json({ ok: true });
+  }));
   app.post('/api/notify-test', limiter(5, 60 * 1000), ah(async (req, res) => {
     const r = await sendAlert('Test alert from Page Smart Solutions', 'If you can read this, new contact form messages will reach you here.');
     res.json(r);
@@ -431,22 +574,49 @@ function createApp() {
   // Jobs (orders)
   const ORDER_SELECT = `SELECT o.*, c.name AS customer_name,
       (SELECT i.id FROM invoices i WHERE i.order_id = o.id ORDER BY i.id DESC LIMIT 1) AS invoice_id,
-      (SELECT i.status FROM invoices i WHERE i.order_id = o.id ORDER BY i.id DESC LIMIT 1) AS invoice_status
+      (SELECT i.status FROM invoices i WHERE i.order_id = o.id ORDER BY i.id DESC LIMIT 1) AS invoice_status,
+      COALESCE((SELECT jsonb_agg(a.user_id ORDER BY a.user_id) FROM job_assignments a WHERE a.order_id = o.id), '[]'::jsonb) AS assignee_ids
     FROM orders o LEFT JOIN customers c ON c.id = o.customer_id`;
-  const withTotal = o => ({ ...o, total: r2((o.items || []).reduce((sum, it) => sum + lineTotal(it), 0)) });
+  const withTotal = o => ({
+    ...o,
+    assignee_ids: typeof o.assignee_ids === 'string' ? JSON.parse(o.assignee_ids) : (o.assignee_ids || []),
+    total: r2((o.items || []).reduce((sum, it) => sum + lineTotal(it), 0)),
+  });
+  // Employees only see jobs they are assigned to. Admin and accounting see everything.
+  const MINE = 'EXISTS (SELECT 1 FROM job_assignments m WHERE m.order_id = o.id AND m.user_id = ';
+  const scoped = (user, where = '', params = []) => (user.role === 'employee'
+    ? { where: (where ? where + ' AND ' : ' WHERE ') + MINE + '$' + (params.length + 1) + ')', params: [...params, user.id] }
+    : { where, params });
+  const timeOr = v => (/^([01]\d|2[0-3]):[0-5]\d$/.test(String(v || '')) ? String(v) : '');
   const orderBody = b => {
     const items = normalizeItems(b.items);
-    return [intOrNull(b.customer_id), str(b.title, 200), ORDER_STATUS.includes(b.status) ? b.status : 'Requested', dateOr(b.service_date), JSON.stringify(items), str(b.notes, 2000), intOrNull(b.one_way_minutes), str(b.from_addr, 300), b.one_way_miles === '' || b.one_way_miles == null ? null : Math.max(0, Math.round(Number(b.one_way_miles) * 10) / 10) || null];
+    const dur = intOrNull(b.duration_minutes);
+    return [intOrNull(b.customer_id), str(b.title, 200), ORDER_STATUS.includes(b.status) ? b.status : 'Requested', dateOr(b.service_date), JSON.stringify(items), str(b.notes, 2000), intOrNull(b.one_way_minutes), str(b.from_addr, 300), b.one_way_miles === '' || b.one_way_miles == null ? null : Math.max(0, Math.round(Number(b.one_way_miles) * 10) / 10) || null,
+      timeOr(b.start_time), dur ? Math.min(1440, Math.max(15, dur)) : null];
   };
-  app.get('/api/orders', ah(async (req, res) => res.json((await q(ORDER_SELECT + ' ORDER BY o.service_date DESC, o.id DESC')).rows.map(withTotal))));
+  const setAssignees = async (orderId, ids) => {
+    const wanted = [...new Set((Array.isArray(ids) ? ids : []).map(Number).filter(Number.isInteger))];
+    const valid = wanted.length ? (await q('SELECT id FROM users WHERE active AND id = ANY($1::int[])', [wanted])).rows.map(r => r.id) : [];
+    await q('DELETE FROM job_assignments WHERE order_id=$1', [orderId]);
+    for (const uid of valid) await q('INSERT INTO job_assignments(order_id,user_id) VALUES ($1,$2) ON CONFLICT DO NOTHING', [orderId, uid]);
+  };
+  app.get('/api/orders', ah(async (req, res) => {
+    const s = scoped(req.user);
+    res.json((await q(ORDER_SELECT + s.where + ' ORDER BY o.service_date DESC, o.start_time DESC, o.id DESC', s.params)).rows.map(withTotal));
+  }));
   app.post('/api/orders', ah(async (req, res) => {
-    const r = await q('INSERT INTO orders(customer_id,title,status,service_date,items,notes,one_way_minutes,from_addr,one_way_miles) VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9) RETURNING id', orderBody(req.body));
-    res.json(withTotal((await q(ORDER_SELECT + ' WHERE o.id=$1', [r.rows[0].id])).rows[0]));
+    const r = await q('INSERT INTO orders(customer_id,title,status,service_date,items,notes,one_way_minutes,from_addr,one_way_miles,start_time,duration_minutes,created_by) VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11,$12) RETURNING id', [...orderBody(req.body), req.user.id]);
+    const id = r.rows[0].id;
+    // Employees can only add jobs for themselves. Admin and accounting choose the crew.
+    await setAssignees(id, CAPS.assign.includes(req.user.role) ? req.body.assignee_ids : [req.user.id]);
+    res.json(withTotal((await q(ORDER_SELECT + ' WHERE o.id=$1', [id])).rows[0]));
   }));
   app.put('/api/orders/:id', ah(async (req, res) => {
     const id = Number(req.params.id);
-    const r = await q('UPDATE orders SET customer_id=$1,title=$2,status=$3,service_date=$4,items=$5::jsonb,notes=$6,one_way_minutes=$7,from_addr=$8,one_way_miles=$9 WHERE id=$10 RETURNING id', [...orderBody(req.body), id]);
-    if (!r.rows[0]) throw httpError(404, 'Not found');
+    const s = scoped(req.user, ' WHERE o.id=$1', [id]);
+    if (!(await q('SELECT o.id FROM orders o' + s.where, s.params)).rows[0]) throw httpError(404, 'Not found');
+    await q('UPDATE orders SET customer_id=$1,title=$2,status=$3,service_date=$4,items=$5::jsonb,notes=$6,one_way_minutes=$7,from_addr=$8,one_way_miles=$9,start_time=$10,duration_minutes=$11 WHERE id=$12', [...orderBody(req.body), id]);
+    if (CAPS.assign.includes(req.user.role) && Array.isArray(req.body.assignee_ids)) await setAssignees(id, req.body.assignee_ids);
     res.json(withTotal((await q(ORDER_SELECT + ' WHERE o.id=$1', [id])).rows[0]));
   }));
   app.delete('/api/orders/:id', ah(async (req, res) => { await q('DELETE FROM orders WHERE id=$1', [Number(req.params.id)]); res.json({ ok: true }); }));
@@ -685,18 +855,24 @@ function createApp() {
     const s = await getSettings();
     const today = todayStr(s);
     const year = Number(today.slice(0, 4));
+    const s2 = scoped(req.user, " WHERE o.status IN ('Requested','Scheduled','In progress','Completed')");
+    const orders = (await q(ORDER_SELECT + s2.where + ' ORDER BY o.service_date ASC, o.start_time ASC, o.id ASC', s2.params)).rows.map(withTotal);
+    // Employees only get their own jobs. Money figures need the invoices permission, profit and tax need the financial permission.
+    if (!CAPS.invoices.includes(req.user.role)) {
+      return res.json({ today, year, orders: orders.slice(0, 8), openOrders: orders.length, unpaid: [], inquiries: [], outstanding: 0, outstandingCount: 0, overdueCount: 0, draftTotal: 0, paidYtd: null, profitYtd: null, setAside: null });
+    }
     const invoices = (await q(INVOICE_SELECT)).rows;
     const sum = list => r2(list.reduce((t, i) => t + i.total, 0));
     const sent = invoices.filter(i => i.status === 'Sent');
     const overdue = sent.filter(i => i.due_date && i.due_date < today);
-    const tax = await taxReport(year);
-    const orders = (await q(ORDER_SELECT + " WHERE o.status IN ('Requested','Scheduled','In progress','Completed') ORDER BY o.service_date ASC, o.id ASC")).rows.map(withTotal);
+    const fin = CAPS.financial.includes(req.user.role) ? await taxReport(year) : null;
     const inquiries = (await q("SELECT * FROM inquiries WHERE status = 'New' ORDER BY created_at DESC LIMIT 10")).rows;
     res.json({
       today, year,
       outstanding: sum(sent), outstandingCount: sent.length, overdueCount: overdue.length,
       draftTotal: sum(invoices.filter(i => i.status === 'Draft')),
-      paidYtd: tax.inputs.revenue, profitYtd: tax.result.netProfit, setAside: tax.result.sideTotalTax,
+      paidYtd: fin ? fin.inputs.revenue : r2(invoices.filter(i => i.status === 'Paid' && (i.paid_date || '').startsWith(String(year))).reduce((t, i) => t + i.total - i.tax, 0)),
+      profitYtd: fin ? fin.result.netProfit : null, setAside: fin ? fin.result.sideTotalTax : null,
       orders: orders.slice(0, 8), openOrders: orders.length,
       unpaid: sent.sort((a, b) => (a.due_date || '9').localeCompare(b.due_date || '9')).slice(0, 8),
       inquiries,
@@ -722,6 +898,7 @@ async function start(port = Number(process.env.PORT) || 3000) {
     process.exit(1);
   }
   await db.init();
+  await ensureOwner();
   const app = createApp();
   return new Promise(resolve => {
     const server = app.listen(port, '0.0.0.0', () => {
